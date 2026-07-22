@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+
+PackageIdentifier: sharkdp
+PackageVersion: 0.26.1
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+- RelativeFilePath: bat-v0.26.1-x86_64-pc-windows-msvc\bat.exe
+  PortableCommandAlias: bat
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/sharkdp/bat/releases/download/v0.26.1/bat-v0.26.1-x86_64-pc-windows-msvc.zip
+  InstallerSha256: 3f2a1c9e7b4d6058ae1f92c3d47b8e05619fa2cd83e740b1592c6de7a03f4b18
+ManifestType: installer
+ManifestVersion: 1.6.0
