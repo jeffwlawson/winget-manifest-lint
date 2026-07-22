@@ -1,0 +1,142 @@
+name: Agent Implement
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  implement:
+    # Job-level, deliberately. A job-level `if:` skips without provisioning a
+    # runner and costs nothing; a step-level guard has already booted a runner
+    # and bills a full rounded-up minute for every unrelated label event.
+    if: github.event.label.name == 'agent:implement'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: agent-implement-issue-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    env:
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+
+    steps:
+      # Refuse rather than race if a PR already targets this issue.
+      - name: Preflight existing PR
+        id: preflight
+        run: |
+          set -euo pipefail
+          existing=$(gh pr list --state open --json number,url,body \
+            --jq "[.[] | select(.body | test(\"(?i)(closes|fixes|resolves)\\\\s+#${ISSUE_NUMBER}\\\\b\"))] | .[0].url // empty")
+          if [ -n "$existing" ]; then
+            echo "refused=true" >> "$GITHUB_OUTPUT"
+            gh issue edit "$ISSUE_NUMBER" --remove-label "agent:implement" || true
+            gh issue comment "$ISSUE_NUMBER" --body "Refused to run: $existing already targets this issue. Close it first, then re-add \`agent:implement\`."
+          else
+            echo "refused=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The trigger label is consumed, not left in place. That is what makes a
+      # retry idempotent: a human re-adds it deliberately.
+      - name: Transition labels
+        if: steps.preflight.outputs.refused == 'false'
+        run: |
+          gh issue edit "$ISSUE_NUMBER" --remove-label "agent:implement" || true
+          gh issue edit "$ISSUE_NUMBER" --remove-label "agent:blocked" || true
+          gh issue edit "$ISSUE_NUMBER" --add-label "agent:in-progress"
+
+      - name: Checkout main
+        if: steps.preflight.outputs.refused == 'false'
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          # AGENT_PAT is optional. When absent this falls back to GITHUB_TOKEN,
+          # which works — except that pushes made with it do not trigger ci.yml
+          # on the resulting PR. Add the secret later and this starts using it
+          # with no change to the workflow.
+          token: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Compute branch name
+        if: steps.preflight.outputs.refused == 'false'
+        id: branch
+        run: |
+          slug=$(echo "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-50)
+          echo "name=agent/issue-${ISSUE_NUMBER}-${slug}" >> "$GITHUB_OUTPUT"
+
+      - name: Create branch
+        if: steps.preflight.outputs.refused == 'false'
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+        run: |
+          git config user.name "sandcastle-agent[bot]"
+          git config user.email "sandcastle-agent[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+
+      - name: Setup Node.js
+        if: steps.preflight.outputs.refused == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.preflight.outputs.refused == 'false'
+        run: npm ci
+
+      - name: Install Claude Code
+        if: steps.preflight.outputs.refused == 'false'
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run implementation agent
+        if: steps.preflight.outputs.refused == 'false'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+          OUTPUT_DIR: ${{ runner.temp }}
+        run: npx tsx .sandcastle/agent-workflows/implement/implement.ts
+
+      - name: Push branch
+        if: steps.preflight.outputs.refused == 'false' && success()
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+        run: git push --force origin "$BRANCH"
+
+      - name: Open draft PR
+        if: steps.preflight.outputs.refused == 'false' && success()
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+        run: |
+          title="Fix #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+          body_file="${RUNNER_TEMP}/pr-body.md"
+          {
+            echo "Closes #${ISSUE_NUMBER}"
+            echo
+            echo "Implemented by the \`agent:implement\` workflow."
+          } > "$body_file"
+          gh pr create --draft --base main --head "$BRANCH" \
+            --title "${title:0:256}" --body-file "$body_file"
+
+      - name: Mark blocked on failure
+        if: steps.preflight.outputs.refused == 'false' && failure()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          reason="(no reason file written; check workflow logs)"
+          if [ -f "${RUNNER_TEMP}/failure_reason.txt" ]; then
+            reason=$(cat "${RUNNER_TEMP}/failure_reason.txt")
+          fi
+          body_file="${RUNNER_TEMP}/failure-comment.md"
+          printf '`agent:implement` run failed.\n\n**Reason:** %s\n\n**Workflow run:** %s\n\nRe-add `agent:implement` to retry.\n' "$reason" "$RUN_URL" > "$body_file"
+          gh issue edit "$ISSUE_NUMBER" --add-label "agent:blocked" || true
+          gh issue comment "$ISSUE_NUMBER" --body-file "$body_file"
+
+      - name: Always remove in-progress
+        if: always() && steps.preflight.outputs.refused == 'false'
+        run: gh issue edit "$ISSUE_NUMBER" --remove-label "agent:in-progress" || true
