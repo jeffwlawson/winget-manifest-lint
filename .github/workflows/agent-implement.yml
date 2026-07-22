@@ -112,6 +112,14 @@ jobs:
         if: steps.preflight.outputs.refused == 'false' && success()
         env:
           BRANCH: ${{ steps.branch.outputs.name }}
+          # gh reads GH_TOKEN from the env. The job-level GH_TOKEN is the
+          # built-in GITHUB_TOKEN, and the Actions bot is forbidden from
+          # creating PRs ("GitHub Actions is not permitted to create or approve
+          # pull requests"). A user PAT is not the Actions bot, so it bypasses
+          # that restriction. Fall back to GITHUB_TOKEN so the step still runs
+          # in forks/setups without the secret — it will fail the same way, but
+          # the workflow shape stays identical.
+          GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
         run: |
           title="Fix #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
           body_file="${RUNNER_TEMP}/pr-body.md"
