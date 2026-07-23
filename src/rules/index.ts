@@ -1,5 +1,5 @@
 import type { Rule } from "./rule.js";
-import installerArchitectureTypeScopeUnique from "./installer-architecture-type-scope-unique.js";
+import installerEntryUnique from "./installer-entry-unique.js";
 import packageIdentifierFormat from "./package-identifier-format.js";
 import packageVersionMatchesDirectory from "./package-version-matches-directory.js";
 import packageVersionPathSafe from "./package-version-path-safe.js";
@@ -14,7 +14,7 @@ import packageVersionPathSafe from "./package-version-path-safe.js";
  * Keep the array ordered by rule id so diffs stay readable.
  */
 export const rules: Rule[] = [
-  installerArchitectureTypeScopeUnique,
+  installerEntryUnique,
   packageIdentifierFormat,
   packageVersionMatchesDirectory,
   packageVersionPathSafe,

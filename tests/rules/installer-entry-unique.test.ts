@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { LineCounter, parseDocument } from "yaml";
 import { parseManifestDirectory, type ManifestPackage } from "../../src/manifest.js";
-import rule from "../../src/rules/installer-architecture-type-scope-unique.js";
+import rule from "../../src/rules/installer-entry-unique.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = (...parts: string[]) => join(here, "..", "fixtures", ...parts);
@@ -28,13 +28,21 @@ function packageWithInstaller(body: string): ManifestPackage {
   };
 }
 
-describe("installer-architecture-type-scope-unique", () => {
+describe("installer-entry-unique", () => {
   it("passes a real manifest whose installers differ by architecture", async () => {
     const { pkg } = await parseManifestDirectory(fixture("valid", "sharkdp.bat", "0.26.1"));
     expect(rule.check(pkg)).toEqual([]);
   });
 
-  it("flags a real manifest with a repeated (Architecture, InstallerType, Scope) tuple", async () => {
+  it("passes a real manifest whose installers differ only by InstallerLocale", async () => {
+    // abgox.InputTip ships the same x64/portable installer twice, once from a
+    // gitee mirror, distinguished only by InstallerLocale. This flagged as a
+    // false positive before InstallerLocale joined the key (issue #37).
+    const { pkg } = await parseManifestDirectory(fixture("valid", "abgox.InputTip", "3.6.7"));
+    expect(rule.check(pkg)).toEqual([]);
+  });
+
+  it("flags a real manifest with a repeated installer key", async () => {
     const { pkg } = await parseManifestDirectory(
       fixture("invalid", "Contoso.DuplicateInstaller", "1.0.0"),
     );
@@ -42,7 +50,7 @@ describe("installer-architecture-type-scope-unique", () => {
 
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]).toMatchObject({
-      ruleId: "installer-architecture-type-scope-unique",
+      ruleId: "installer-entry-unique",
       severity: "error",
       file: "Contoso.DuplicateInstaller.installer.yaml",
     });
@@ -60,6 +68,21 @@ describe("installer-architecture-type-scope-unique", () => {
     expect(rule.check(pkg)).toEqual([]);
   });
 
+  it("passes when two installers differ only by InstallerLocale", () => {
+    const pkg = packageWithInstaller(
+      "InstallerType: portable\nInstallers:\n- Architecture: x64\n  InstallerLocale: en-US\n- Architecture: x64\n  InstallerLocale: zh-CN\n",
+    );
+    expect(rule.check(pkg)).toEqual([]);
+  });
+
+  it("resolves InstallerLocale from the root default, collapsing to a duplicate", () => {
+    // Both installers inherit the root locale, so all four key fields match.
+    const pkg = packageWithInstaller(
+      "InstallerType: portable\nInstallerLocale: en-US\nInstallers:\n- Architecture: x64\n- Architecture: x64\n",
+    );
+    expect(rule.check(pkg)).toHaveLength(1);
+  });
+
   it("passes when scope disambiguates otherwise-identical installers", () => {
     const pkg = packageWithInstaller(
       "InstallerType: msi\nInstallers:\n- Architecture: x64\n  Scope: user\n- Architecture: x64\n  Scope: machine\n",
@@ -67,9 +90,17 @@ describe("installer-architecture-type-scope-unique", () => {
     expect(rule.check(pkg)).toEqual([]);
   });
 
+  it("treats an unspecified scope as a wildcard that collides with a known scope", () => {
+    // winget: an absent scope matches any scope, so these are not distinct.
+    const pkg = packageWithInstaller(
+      "InstallerType: msi\nInstallers:\n- Architecture: x64\n  Scope: machine\n- Architecture: x64\n",
+    );
+    expect(rule.check(pkg)).toHaveLength(1);
+  });
+
   it("resolves InstallerType and Scope from the installer entry over the root default", () => {
     // Both installers are x64; the first inherits the root msi, the second
-    // overrides to exe — so the tuples differ and this is valid.
+    // overrides to exe — so the keys differ and this is valid.
     const pkg = packageWithInstaller(
       "InstallerType: msi\nInstallers:\n- Architecture: x64\n- Architecture: x64\n  InstallerType: exe\n",
     );
@@ -85,6 +116,22 @@ describe("installer-architecture-type-scope-unique", () => {
     expect(diagnostics[0]?.message).toContain("msi");
   });
 
+  it("keeps two archive installers distinct when their NestedInstallerType differs", () => {
+    const pkg = packageWithInstaller(
+      "InstallerType: zip\nInstallers:\n- Architecture: x64\n  NestedInstallerType: portable\n- Architecture: x64\n  NestedInstallerType: exe\n",
+    );
+    expect(rule.check(pkg)).toEqual([]);
+  });
+
+  it("flags two archive installers that share NestedInstallerType and the rest of the key", () => {
+    const pkg = packageWithInstaller(
+      "InstallerType: zip\nInstallers:\n- Architecture: x64\n  NestedInstallerType: portable\n- Architecture: x64\n  NestedInstallerType: portable\n",
+    );
+    const diagnostics = rule.check(pkg);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("NestedInstallerType: portable");
+  });
+
   it("treats two installers with no type or scope as duplicates when architecture matches", () => {
     const pkg = packageWithInstaller(
       "Installers:\n- Architecture: x64\n- Architecture: x64\n",
@@ -92,7 +139,7 @@ describe("installer-architecture-type-scope-unique", () => {
     expect(rule.check(pkg)).toHaveLength(1);
   });
 
-  it("reports each distinct duplicated tuple once", () => {
+  it("reports each distinct duplicated key once", () => {
     const pkg = packageWithInstaller(
       "InstallerType: msi\nInstallers:\n- Architecture: x64\n- Architecture: x86\n- Architecture: x64\n- Architecture: x86\n",
     );

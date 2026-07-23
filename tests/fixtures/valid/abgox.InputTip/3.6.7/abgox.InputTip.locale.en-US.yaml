@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+
+PackageIdentifier: abgox.InputTip
+PackageVersion: 3.6.7
+PackageLocale: en-US
+Publisher: abgox
+PackageName: InputTip
+License: MIT
+ShortDescription: Show the input method state at the cursor.
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
