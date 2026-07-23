@@ -1,5 +1,6 @@
 import type { Rule } from "./rule.js";
 import packageIdentifierFormat from "./package-identifier-format.js";
+import packageVersionMatchesDirectory from "./package-version-matches-directory.js";
 import packageVersionPathSafe from "./package-version-path-safe.js";
 
 /**
@@ -11,7 +12,11 @@ import packageVersionPathSafe from "./package-version-path-safe.js";
  *
  * Keep the array ordered by rule id so diffs stay readable.
  */
-export const rules: Rule[] = [packageIdentifierFormat, packageVersionPathSafe];
+export const rules: Rule[] = [
+  packageIdentifierFormat,
+  packageVersionMatchesDirectory,
+  packageVersionPathSafe,
+];
 
 export { defineRule } from "./rule.js";
 export type { Rule } from "./rule.js";
