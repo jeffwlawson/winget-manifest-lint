@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+
+PackageIdentifier: abgox.InputTip
+PackageVersion: 3.6.7
+InstallerType: portable
+Installers:
+- Architecture: x64
+  InstallerLocale: en-US
+  InstallerUrl: https://github.com/abgox/InputTip/releases/download/3.6.7/InputTip.exe
+  InstallerSha256: 3f2a1c9e7b4d6058ae1f92c3d47b8e05619fa2cd83e740b1592c6de7a03f4b18
+- Architecture: x64
+  InstallerLocale: zh-CN
+  InstallerUrl: https://gitee.com/abgox/InputTip/releases/download/3.6.7/InputTip.exe
+  InstallerSha256: 9c81d5470ae3f26b1849dcae05f37b62901e4dab7f5c8039e26a1bf74c30d95a
+ManifestType: installer
+ManifestVersion: 1.6.0
