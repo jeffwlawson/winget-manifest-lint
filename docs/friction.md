@@ -420,6 +420,57 @@ loop that writes rules is the same loop that fixes them once the oracle points a
 
 ---
 
+## 2026-07-23 — Independent review of the review workflow caught a real injection path
+
+Building `agent-review.yml` (review-lite, the second workflow) introduced the first genuine
+security surface: `pull_request_target`. On a public repo that trigger runs with secrets and
+write access, so it is the classic fork-code-execution footgun. Before merging, an independent
+reviewer (fresh context, told to be adversarial) went over it.
+
+**The fork guard was correct.** The job-level
+`if: … && github.event.pull_request.head.repo.full_name == github.repository` fails closed: a
+fork PR skips the entire job before a runner is provisioned, so no checkout, no `npm ci`, no
+secret exposure. Label-adding also requires triage/write permission, so a random user cannot
+even trigger it. That part held up.
+
+**But the same-repo guard closed only one of two doors.** The reviewer found a second
+exfiltration path the fork guard does not touch:
+
+- `review-context.ts` fetched the linked issue with `gh issue view N --comments`. **Issue
+  comments on a public repo are world-writable — anyone can post one.**
+- That text flowed verbatim into the agent prompt. The agent runs unsandboxed (`noSandbox`) with
+  `CLAUDE_CODE_OAUTH_TOKEN` in its environment, and its output is posted as a **public** review.
+- So a poisoned issue comment could instruct the agent to write the token into the review body —
+  no network egress or fork required. Gated only by a collaborator labelling a PR that links to
+  the poisoned issue.
+
+**The fix, and why it is sufficient.** Dropped `--comments`; the agent now sees only the issue
+**title and body**. Comments were the *only* world-writable input in the chain — the issue
+body, the PR diff, and the PR body all require repo write access to author (we create the
+issues; same-repo branches need write access; fork PRs are already blocked). So the change moves
+review's injection surface behind the exact same write-access trust boundary the implement
+workflow already assumes. Review is now no more exposed than implement; the residual
+(`CLAUDE_CODE_OAUTH_TOKEN` in an unsandboxed agent) is identical to implement's and equally gated.
+
+**Also fixed, from the same review:**
+
+- The diff used `git diff main...HEAD || git diff main..HEAD`. The two-dot fallback has different
+  semantics and would silently mis-filter inline comments on a no-change PR. Dropped it — the
+  three-dot diff, empty string and all, is the correct and only form.
+- The workflow's `git fetch origin main:main || git fetch origin main` fallback would populate
+  `FETCH_HEAD` but create no local `main` ref, breaking the diff. Replaced with an explicit
+  refspec.
+
+**The lesson.** The author (me) checked the fork guard carefully and it was right — but was
+blind to the injection path precisely because it is *not* the famous `pull_request_target` hole.
+A fresh adversarial reviewer with no attachment to the design found it in one pass. For anything
+carrying secrets on a public repo, an independent review is worth its cost. A possible future
+hardening (not done, documented instead): fetch context in a separate step and drop `GH_TOKEN`
+from the agent step entirely, so an injected agent could not use `gh` even if the input were
+trusted-but-hostile.
+
+---
+
 ## Pending — not yet exercised
 
 The loop is proven for implement across all three rule classes, and the corpus has closed the

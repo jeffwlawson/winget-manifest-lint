@@ -26,15 +26,30 @@ export const fetchPullRequestContext = (prNumber: string): PullRequestContext =>
 
   const issueMatch = (prView.body ?? "").match(/(?:closes|fixes|resolves)\s+#(\d+)/i);
   const issueNumber = issueMatch?.[1] ?? "";
-  const issueTitle = issueNumber
-    ? safeSh(`gh issue view ${issueNumber} --json title --jq .title`).trim()
-    : "";
-  const linkedIssue = issueNumber
-    ? safeSh(`gh issue view ${issueNumber} --comments`)
-    : "(no linked issue found)";
 
-  // `main` is fetched as a local ref by the workflow before this runs.
-  const diff = safeSh("git diff main...HEAD") || sh("git diff main..HEAD");
+  // SECURITY: fetch only the issue title and body, NOT `--comments`. Issue
+  // comments on a public repo are world-writable — anyone can post one — and
+  // this text is fed verbatim to an unsandboxed agent that holds the model
+  // token and posts a public review. World-writable input + secret-bearing
+  // agent + public output is a prompt-injection exfiltration path. The title
+  // and body require repo write access to author (we create the issues), so
+  // restricting to them keeps the injection surface behind the same write-access
+  // trust boundary the whole loop already assumes.
+  let issueTitle = "";
+  let linkedIssue = "(no linked issue found)";
+  if (issueNumber) {
+    const issueView = JSON.parse(
+      safeSh(`gh issue view ${issueNumber} --json title,body`) || "{}",
+    ) as { title?: string; body?: string | null };
+    issueTitle = issueView.title ?? "";
+    linkedIssue = issueView.body?.trim() || "(linked issue has no description)";
+  }
+
+  // `main` is fetched as a local ref by the workflow before this runs. Use the
+  // three-dot diff (changes since the merge-base) only — no two-dot fallback,
+  // which has different semantics and would silently mis-filter inline comments.
+  // An empty string here legitimately means "no changes", not an error.
+  const diff = sh("git diff main...HEAD");
 
   return {
     prTitle: prView.title,

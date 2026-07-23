@@ -47,7 +47,10 @@ jobs:
           fetch-depth: 0
 
       - name: Make main available for diffing
-        run: git fetch origin main:main || git fetch origin main
+        # Create a local `main` ref (the checkout is of head.sha, so main is not
+        # present). review-context.ts diffs against it; a bare `git fetch origin
+        # main` would populate FETCH_HEAD but no `main` ref, so keep the refspec.
+        run: git fetch origin +refs/heads/main:refs/heads/main
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
