@@ -48,20 +48,20 @@ describe("package-identifier-format", () => {
       severity: "error",
       file: "sharkdp.yaml",
     });
-    expect(diagnostics[0]?.message).toContain("2 to 4 dot-separated segments");
+    expect(diagnostics[0]?.message).toContain("2 to 8 dot-separated segments");
     // Reports on the version file only, not on all three copies.
     expect(diagnostics.map((d) => d.file)).toEqual(["sharkdp.yaml"]);
     expect(diagnostics[0]?.position).toBeDefined();
   });
 
-  it.each(["Publisher.Package", "A.B.C", "A.B.C.D"])(
-    "accepts %s (2 to 4 segments)",
+  it.each(["Publisher.Package", "A.B.C", "A.B.C.D", "A.B.C.D.E", "A.B.C.D.E.F.G.H"])(
+    "accepts %s (2 to 8 segments)",
     (identifier) => {
       expect(rule.check(packageWithIdentifier(identifier))).toEqual([]);
     },
   );
 
-  it.each(["singlesegment", "A.B.C.D.E"])(
+  it.each(["singlesegment", "A.B.C.D.E.F.G.H.I"])(
     "rejects %s (wrong segment count)",
     (identifier) => {
       const diagnostics = rule.check(packageWithIdentifier(identifier));
