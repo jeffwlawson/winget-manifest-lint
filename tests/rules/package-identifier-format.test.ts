@@ -48,20 +48,20 @@ describe("package-identifier-format", () => {
       severity: "error",
       file: "sharkdp.yaml",
     });
-    expect(diagnostics[0]?.message).toContain("2 to 4 dot-separated segments");
+    expect(diagnostics[0]?.message).toContain("2 to 8 dot-separated segments");
     // Reports on the version file only, not on all three copies.
     expect(diagnostics.map((d) => d.file)).toEqual(["sharkdp.yaml"]);
     expect(diagnostics[0]?.position).toBeDefined();
   });
 
-  it.each(["Publisher.Package", "A.B.C", "A.B.C.D"])(
-    "accepts %s (2 to 4 segments)",
+  it.each(["Publisher.Package", "A.B.C", "A.B.C.D", "A.B.C.D.E", "A.B.C.D.E.F.G.H"])(
+    "accepts %s (2 to 8 segments)",
     (identifier) => {
       expect(rule.check(packageWithIdentifier(identifier))).toEqual([]);
     },
   );
 
-  it.each(["singlesegment", "A.B.C.D.E"])(
+  it.each(["singlesegment", "A.B.C.D.E.F.G.H.I"])(
     "rejects %s (wrong segment count)",
     (identifier) => {
       const diagnostics = rule.check(packageWithIdentifier(identifier));
@@ -71,23 +71,53 @@ describe("package-identifier-format", () => {
   );
 
   it("accepts an identifier exactly at the 128-character limit", () => {
-    const identifier = `Pub.${"a".repeat(124)}`; // 4 + 124 = 128
+    // Built from segments of <=32 chars so only the total-length bound is in
+    // play: 32+32+32+29 + 3 dots = 128.
+    const seg = "a".repeat(32);
+    const identifier = `${seg}.${seg}.${seg}.${"a".repeat(29)}`;
     expect(identifier).toHaveLength(128);
     expect(rule.check(packageWithIdentifier(identifier))).toEqual([]);
   });
 
   it("rejects an identifier over the 128-character limit", () => {
-    const identifier = `Pub.${"a".repeat(125)}`; // 4 + 125 = 129, still 2 segments
+    // 32+32+32+30 + 3 dots = 129; every segment still within range, so the
+    // only violation is total length.
+    const seg = "a".repeat(32);
+    const identifier = `${seg}.${seg}.${seg}.${"a".repeat(30)}`;
+    expect(identifier).toHaveLength(129);
     const diagnostics = rule.check(packageWithIdentifier(identifier));
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.message).toContain("128-character limit");
   });
 
-  it("reports both problems when segment count and length are wrong", () => {
-    const identifier = "a".repeat(130); // 1 segment and 130 characters
+  it("reports both problems when segment count and total length are wrong", () => {
+    // 9 segments of 20 chars: too many segments AND over 128 total, but each
+    // segment is individually within range, so exactly two problems.
+    const identifier = Array.from({ length: 9 }, () => "a".repeat(20)).join(".");
     const diagnostics = rule.check(packageWithIdentifier(identifier));
     expect(diagnostics).toHaveLength(2);
     expect(diagnostics.map((d) => d.message).join(" ")).toMatch(/segments[\s\S]*limit|limit[\s\S]*segments/);
+  });
+
+  it.each([".Package", "Publisher.", "Pub..Package"])(
+    "rejects %s (empty segment)",
+    (identifier) => {
+      const diagnostics = rule.check(packageWithIdentifier(identifier));
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.message).toContain("empty segment");
+    },
+  );
+
+  it("rejects a segment longer than 32 characters", () => {
+    const identifier = `Pub.${"a".repeat(33)}`; // 2 segments, second is 33 chars
+    const diagnostics = rule.check(packageWithIdentifier(identifier));
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("each segment must be 1 to 32 characters");
+  });
+
+  it("accepts a segment exactly 32 characters", () => {
+    const identifier = `Pub.${"a".repeat(32)}`;
+    expect(rule.check(packageWithIdentifier(identifier))).toEqual([]);
   });
 
   it("says nothing when there is no version file", () => {
