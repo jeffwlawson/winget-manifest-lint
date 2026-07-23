@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+
+PackageIdentifier: Contoso.DuplicateInstaller
+PackageVersion: 1.0.0
+InstallerType: msi
+Installers:
+- Architecture: x64
+  Scope: machine
+  InstallerUrl: https://example.com/tool-1.0.0-x64.msi
+  InstallerSha256: 3f2a1c9e7b4d6058ae1f92c3d47b8e05619fa2cd83e740b1592c6de7a03f4b18
+- Architecture: x86
+  Scope: machine
+  InstallerUrl: https://example.com/tool-1.0.0-x86.msi
+  InstallerSha256: 9c81d5470ae3f26b1849dcae05f37b62901e4dab7f5c8039e26a1bf74c30d95a
+- Architecture: x64
+  Scope: machine
+  InstallerUrl: https://example.com/tool-1.0.0-x64-dup.msi
+  InstallerSha256: 1a2b3c4d5e6f70819293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9
+ManifestType: installer
+ManifestVersion: 1.6.0
