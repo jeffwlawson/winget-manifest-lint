@@ -2,7 +2,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as sandcastle from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
-import { claudeAgent, fail, required, sh, writeJson, writeText } from "../shared/common.js";
+import {
+  claudeAgent,
+  fail,
+  required,
+  scrubGitHubTokens,
+  sh,
+  writeJson,
+  writeText,
+} from "../shared/common.js";
 import { fetchPullRequestContext } from "../shared/review-context.js";
 import { filterInlineComments, reviewOutputSchema } from "../shared/review-output.js";
 import { runWithExtraction } from "../shared/run-with-extraction.js";
@@ -12,6 +20,11 @@ const BRANCH = required("BRANCH");
 
 try {
   const context = fetchPullRequestContext(PR_NUMBER);
+
+  // All `gh`-based context fetching is done; the review agent must not hold the
+  // GitHub token (it has no legitimate use for it, and posting happens in a
+  // separate workflow step). Remove it before the unsandboxed agent starts.
+  scrubGitHubTokens();
 
   const result = await runWithExtraction({
     name: `review-pr-${PR_NUMBER}`,
