@@ -1,0 +1,92 @@
+name: Agent Review
+
+# Uses pull_request_target so the labeled event runs with repo secrets and write
+# access. On a PUBLIC repo that is a fork-code-execution path, so the job is
+# guarded to same-repo PRs only (see the `if:` below). Agent PRs are always
+# same-repo, so this loses nothing while closing the hole.
+on:
+  pull_request_target:
+    types: [labeled]
+
+jobs:
+  review:
+    # Two guards, both required:
+    #  - the trigger label, and
+    #  - same-repo head: a fork PR must never reach the checkout+npm ci steps,
+    #    which would run untrusted code with secrets in scope.
+    if: >-
+      github.event.label.name == 'agent:review' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: agent-review-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      BRANCH: ${{ github.event.pull_request.head.ref }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+
+    steps:
+      - name: Transition labels
+        run: |
+          gh pr edit "$PR_NUMBER" --remove-label "agent:review" || true
+          gh pr edit "$PR_NUMBER" --remove-label "agent:blocked" || true
+          gh pr edit "$PR_NUMBER" --add-label "agent:in-progress"
+
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Make main available for diffing
+        run: git fetch origin main:main || git fetch origin main
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run review agent
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          OUTPUT_DIR: ${{ runner.temp }}
+        run: npx tsx .sandcastle/agent-workflows/review/review.ts
+
+      - name: Post PR review
+        if: success()
+        env:
+          PAYLOAD: ${{ runner.temp }}/review_payload.json
+        run: gh api --method POST "repos/{owner}/{repo}/pulls/${PR_NUMBER}/reviews" --input "$PAYLOAD"
+
+      - name: Mark blocked on failure
+        if: failure()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          reason="(no reason file written; check workflow logs)"
+          if [ -f "${RUNNER_TEMP}/failure_reason.txt" ]; then
+            reason=$(cat "${RUNNER_TEMP}/failure_reason.txt")
+          fi
+          body_file="${RUNNER_TEMP}/failure-comment.md"
+          printf '`agent:review` run failed.\n\n**Reason:** %s\n\n**Workflow run:** %s\n\nRe-add `agent:review` to retry.\n' "$reason" "$RUN_URL" > "$body_file"
+          gh pr edit "$PR_NUMBER" --add-label "agent:blocked" || true
+          gh pr comment "$PR_NUMBER" --body-file "$body_file"
+
+      - name: Always remove in-progress
+        if: always()
+        run: gh pr edit "$PR_NUMBER" --remove-label "agent:in-progress" || true
