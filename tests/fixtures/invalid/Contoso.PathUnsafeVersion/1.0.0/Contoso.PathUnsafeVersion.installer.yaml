@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+
+PackageIdentifier: Contoso.PathUnsafeVersion
+PackageVersion: 1.0:0
+Installers:
+- Architecture: x64
+  InstallerType: exe
+  InstallerUrl: https://example.com/tool-1.0.0-x64.exe
+  InstallerSha256: 3f2a1c9e7b4d6058ae1f92c3d47b8e05619fa2cd83e740b1592c6de7a03f4b18
+ManifestType: installer
+ManifestVersion: 1.6.0
