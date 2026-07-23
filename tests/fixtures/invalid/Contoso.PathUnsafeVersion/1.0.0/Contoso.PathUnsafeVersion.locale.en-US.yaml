@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+
+PackageIdentifier: Contoso.PathUnsafeVersion
+PackageVersion: 1.0:0
+PackageLocale: en-US
+Publisher: Contoso
+PackageName: PathUnsafeVersion
+License: MIT
+ShortDescription: A tool with a path-unsafe version string.
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
