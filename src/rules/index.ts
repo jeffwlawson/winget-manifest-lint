@@ -1,4 +1,5 @@
 import type { Rule } from "./rule.js";
+import packageIdentifierFormat from "./package-identifier-format.js";
 
 /**
  * The rule registry.
@@ -9,7 +10,7 @@ import type { Rule } from "./rule.js";
  *
  * Keep the array ordered by rule id so diffs stay readable.
  */
-export const rules: Rule[] = [];
+export const rules: Rule[] = [packageIdentifierFormat];
 
 export { defineRule } from "./rule.js";
 export type { Rule } from "./rule.js";
