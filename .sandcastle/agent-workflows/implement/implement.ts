@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as sandcastle from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
-import { claudeAgent, fail, required, safeSh, sh } from "../shared/common.js";
+import { claudeAgent, fail, fetchTrustedIssue, required, scrubGitHubTokens, sh } from "../shared/common.js";
 
 const ISSUE_NUMBER = required("ISSUE_NUMBER");
 const ISSUE_TITLE = required("ISSUE_TITLE");
@@ -9,11 +9,17 @@ const BRANCH = required("BRANCH");
 
 try {
   // Read the issue here and pass it in, rather than letting the agent shell out
-  // to `gh`. noSandbox() leaks the runner's GH_TOKEN into the agent process, so
-  // the less reason it has to reach for `gh`, the better the boundary holds.
-  const issueContext =
-    safeSh(`gh issue view ${ISSUE_NUMBER} --comments`) ||
-    `Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}`;
+  // to `gh`. SECURITY: use the author-gated fetch and never `--comments` — issue
+  // comments are world-writable on a public repo, so feeding them to the
+  // unsandboxed agent is a prompt-injection path. If the issue author lacks
+  // write access, its body is withheld entirely.
+  const issue = fetchTrustedIssue(ISSUE_NUMBER);
+  const issueContext = issue.trusted
+    ? `# ${issue.title || ISSUE_TITLE}\n\n${issue.body || "(no description)"}`
+    : `Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}\n\n(Issue body withheld: the issue author is not a repo collaborator.)`;
+
+  // Context fetched; the agent has no legitimate use for the GitHub token.
+  scrubGitHubTokens();
 
   const result = await sandcastle.run({
     name: `implement-#${ISSUE_NUMBER}`,
