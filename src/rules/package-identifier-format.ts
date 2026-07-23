@@ -20,6 +20,11 @@ import { defineRule } from "./rule.js";
 const MIN_SEGMENTS = 2;
 const MAX_SEGMENTS = 8;
 const MAX_LENGTH = 128;
+// Each segment matches `[^.\s...]{1,32}` in the schema: 1 to 32 characters, so
+// an empty segment (a leading, trailing, or doubled dot) is a length violation
+// too — this check subsumes the empty-segment case.
+const MIN_SEGMENT_LENGTH = 1;
+const MAX_SEGMENT_LENGTH = 32;
 
 export default defineRule({
   id: "package-identifier-format",
@@ -42,11 +47,26 @@ export default defineRule({
 
     const diagnostics: Diagnostic[] = [];
 
-    const segments = value.split(".").length;
-    if (segments < MIN_SEGMENTS || segments > MAX_SEGMENTS) {
+    const segments = value.split(".");
+    if (segments.length < MIN_SEGMENTS || segments.length > MAX_SEGMENTS) {
       diagnostics.push({
         ...base,
-        message: `PackageIdentifier "${value}" must have ${MIN_SEGMENTS} to ${MAX_SEGMENTS} dot-separated segments, but has ${segments}.`,
+        message: `PackageIdentifier "${value}" must have ${MIN_SEGMENTS} to ${MAX_SEGMENTS} dot-separated segments, but has ${segments.length}.`,
+      });
+    }
+
+    const badSegment = segments.find(
+      (segment) =>
+        segment.length < MIN_SEGMENT_LENGTH || segment.length > MAX_SEGMENT_LENGTH,
+    );
+    if (badSegment !== undefined) {
+      const detail =
+        badSegment.length === 0
+          ? "an empty segment (leading, trailing, or doubled dot)"
+          : `segment "${badSegment}" is ${badSegment.length} characters`;
+      diagnostics.push({
+        ...base,
+        message: `PackageIdentifier "${value}" has ${detail}; each segment must be ${MIN_SEGMENT_LENGTH} to ${MAX_SEGMENT_LENGTH} characters.`,
       });
     }
 
