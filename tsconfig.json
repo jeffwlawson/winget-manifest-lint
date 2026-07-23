@@ -15,5 +15,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", ".sandcastle/**/*.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", ".sandcastle/**/*.ts", "scripts/**/*.ts"]
 }

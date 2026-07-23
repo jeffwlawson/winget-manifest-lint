@@ -22,7 +22,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify": "npm run typecheck && npm run test"
+    "verify": "npm run typecheck && npm run test",
+    "corpus": "tsx scripts/lint-corpus.ts"
   },
   "dependencies": {
     "yaml": "2.8.1"
