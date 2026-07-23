@@ -5,8 +5,11 @@ import { defineRule } from "./rule.js";
 /**
  * `PackageIdentifier` is a dotted identifier — `Publisher.Package`, optionally
  * with further qualifying segments (`Microsoft.VisualStudio.2022.Community`).
- * winget requires between 2 and 4 segments and a total length of at most 128
- * characters.
+ * winget's schema allows a first segment followed by 1 to 7 more, i.e. between
+ * 2 and 8 segments in total, with a total length of at most 128 characters.
+ * Capping segments at 4 flagged legitimate identifiers in the winget-pkgs
+ * corpus (e.g. `Microsoft.VisualStudioCode.Insiders.System.arm64`) as false
+ * positives.
  *
  * This is a single-field rule (see CONTEXT.md): it judges one value in one
  * file. The identifier appears in all three files, but the version manifest is
@@ -15,13 +18,13 @@ import { defineRule } from "./rule.js";
  * wherever it appears without reporting the same problem three times.
  */
 const MIN_SEGMENTS = 2;
-const MAX_SEGMENTS = 4;
+const MAX_SEGMENTS = 8;
 const MAX_LENGTH = 128;
 
 export default defineRule({
   id: "package-identifier-format",
   description:
-    "PackageIdentifier is 2 to 4 dot-separated segments and at most 128 characters.",
+    "PackageIdentifier is 2 to 8 dot-separated segments and at most 128 characters.",
   check(pkg) {
     const file = versionFile(pkg);
     if (!file) return [];
