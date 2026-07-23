@@ -1,0 +1,58 @@
+name: Corpus
+
+# Lint a pinned snapshot of microsoft/winget-pkgs. Every manifest there is
+# known-good (Microsoft accepted it), so ANY diagnostic this job emits is a
+# false positive in one of our rules and fails the build. See CONTEXT.md.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, so rule regressions surface even when nobody is pushing.
+    - cron: "17 6 * * 1"
+  pull_request:
+    # Only when linter logic changes — not on doc-only or workflow-plumbing PRs.
+    # Agent rule PRs touch src/rules/**, so they trigger this by design.
+    paths:
+      - "src/**"
+      - "schemas/**"
+      - "scripts/lint-corpus.ts"
+      - ".github/workflows/corpus.yml"
+
+# A newer push to the same PR/branch supersedes an in-flight corpus run.
+concurrency:
+  group: corpus-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout linter
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      # Pinned to a specific commit, never a floating ref — otherwise this job
+      # turns flaky on someone else's merge into winget-pkgs. Bump deliberately.
+      # Pinned 2026-07-23: Microsoft.SafetyScanner 1.455.285.0 (PR #406461).
+      - name: Checkout winget-pkgs snapshot
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/winget-pkgs
+          ref: bf66d90725cb4253b67a22c259ac50a6dade680f
+          path: winget-pkgs
+          sparse-checkout: manifests
+          sparse-checkout-cone-mode: true
+          fetch-depth: 1
+
+      - name: Lint the corpus
+        env:
+          CORPUS_DIR: ${{ github.workspace }}/winget-pkgs
+          MAX_PACKAGES: "4000"
+        run: npm run corpus
