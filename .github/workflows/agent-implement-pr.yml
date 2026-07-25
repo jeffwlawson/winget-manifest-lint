@@ -114,6 +114,49 @@ jobs:
           fi
           git push --force-with-lease="refs/heads/$BRANCH:$BRANCH_HEAD_SHA" origin "$BRANCH"
 
+      # Reply into every thread the agent reported on, and resolve only the ones
+      # it addressed. A declined thread keeps its reply but stays OPEN, so a
+      # human can push back — auto-resolving a decline would let the agent
+      # quietly bury a disagreement.
+      #
+      # Both are GraphQL mutations keyed on the thread node id, so no REST
+      # comment-id lookup is needed. Runs even when the agent made no commits:
+      # "I looked and declined" is still worth saying out loud.
+      - name: Reply to and resolve review threads
+        if: steps.state.outputs.proceed == 'true' && success()
+        continue-on-error: true
+        env:
+          OUTCOMES: ${{ runner.temp }}/thread_outcomes.json
+        run: |
+          set -uo pipefail
+          [ -f "$OUTCOMES" ] || { echo "No outcomes file; nothing to post."; exit 0; }
+          count=$(jq 'length' "$OUTCOMES")
+          echo "Posting ${count} thread outcome(s)."
+
+          for i in $(seq 0 $((count - 1))); do
+            tid=$(jq -r ".[$i].threadId" "$OUTCOMES")
+            status=$(jq -r ".[$i].status" "$OUTCOMES")
+            body=$(jq -r ".[$i].reply" "$OUTCOMES")
+
+            gh api graphql -f threadId="$tid" -f body="$body" -f query='
+              mutation($threadId:ID!,$body:String!) {
+                addPullRequestReviewThreadReply(
+                  input:{pullRequestReviewThreadId:$threadId, body:$body}
+                ) { clientMutationId }
+              }' >/dev/null \
+              && echo "  replied to ${tid}" \
+              || echo "  WARNING: reply failed for ${tid}"
+
+            if [ "$status" = "addressed" ]; then
+              gh api graphql -f threadId="$tid" -f query='
+                mutation($threadId:ID!) {
+                  resolveReviewThread(input:{threadId:$threadId}) { clientMutationId }
+                }' >/dev/null \
+                && echo "  resolved ${tid}" \
+                || echo "  WARNING: resolve failed for ${tid}"
+            fi
+          done
+
       - name: Mark blocked on failure
         if: steps.state.outputs.proceed == 'true' && failure()
         env:
