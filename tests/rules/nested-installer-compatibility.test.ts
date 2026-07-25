@@ -88,25 +88,24 @@ describe("nested-installer-compatibility", () => {
     expect(diagnostics[0]?.message).toContain("RelativeFilePath");
   });
 
-  it("errors when nested fields appear on a non-archive installer", () => {
+  it("ignores nested fields on a non-archive installer", () => {
+    // winget performs no nested-field validation on non-archive types (the
+    // ManifestValidation.cpp block is guarded by IsArchiveType with no else), so
+    // a portable/exe installer carrying NestedInstallerFiles is valid and common.
     const pkg = packageWithInstaller(
-      "InstallerType: msi\nInstallers:\n- Architecture: x64\n  NestedInstallerType: exe\n",
+      "InstallerType: portable\nInstallers:\n- Architecture: x64\n  NestedInstallerType: exe\n  NestedInstallerFiles:\n  - RelativeFilePath: app\\tool.exe\n    PortableCommandAlias: tool\n",
     );
-    const diagnostics = rule.check(pkg);
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("non-archive");
-    expect(diagnostics[0]?.message).toContain("NestedInstallerType");
+    expect(rule.check(pkg)).toEqual([]);
   });
 
-  it("errors when a per-installer type override drops an archive to a non-archive holding nested fields", () => {
-    // Root is zip with nested defaults; this installer overrides to exe, so the
-    // inherited nested fields no longer apply.
+  it("ignores inherited nested fields when a per-installer type override drops an archive to a non-archive", () => {
+    // Root is zip with nested defaults; this installer overrides to exe. The
+    // inherited nested fields no longer apply, but winget ignores them rather
+    // than rejecting — so nor do we.
     const pkg = packageWithInstaller(
       "InstallerType: zip\nNestedInstallerType: exe\nNestedInstallerFiles:\n- RelativeFilePath: app\\tool.exe\nInstallers:\n- Architecture: x64\n  InstallerType: exe\n",
     );
-    const diagnostics = rule.check(pkg);
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("non-archive");
+    expect(rule.check(pkg)).toEqual([]);
   });
 
   it("passes when a per-installer type override lifts a non-archive default to an archive with nested fields", () => {
