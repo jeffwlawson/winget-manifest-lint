@@ -1,5 +1,11 @@
 import type { Diagnostic, Position } from "../diagnostic.js";
-import { installerFile, positionOf, type ManifestFile } from "../manifest.js";
+import {
+  installerFile,
+  isArchiveType,
+  positionOf,
+  stringOrUndefined,
+  type ManifestFile,
+} from "../manifest.js";
 import { defineRule } from "./rule.js";
 
 /**
@@ -23,8 +29,6 @@ import { defineRule } from "./rule.js";
  * resolve each entry's effective values before judging it — honouring a
  * per-installer `InstallerType` that overrides the file-level default.
  */
-const ARCHIVE_TYPES = new Set(["zip"]);
-
 export default defineRule({
   id: "nested-installer-compatibility",
   description:
@@ -50,7 +54,7 @@ export default defineRule({
       const nestedType = stringOrUndefined(record["NestedInstallerType"]) ?? rootNestedType;
       const nestedFiles = arrayOrUndefined(record["NestedInstallerFiles"]) ?? rootNestedFiles;
 
-      if (isArchive(type)) {
+      if (isArchiveType(type)) {
         if (nestedType === undefined) {
           diagnostics.push(
             diagnostic(
@@ -127,14 +131,6 @@ function hasRelativeFilePath(files: unknown[] | undefined): boolean {
         typeof (entry as Record<string, unknown>)["RelativeFilePath"] === "string",
     )
   );
-}
-
-function isArchive(type: string | undefined): boolean {
-  return type !== undefined && ARCHIVE_TYPES.has(type.toLowerCase());
-}
-
-function stringOrUndefined(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
 }
 
 function arrayOrUndefined(value: unknown): unknown[] | undefined {

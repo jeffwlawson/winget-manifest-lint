@@ -1,5 +1,5 @@
 import type { Diagnostic } from "../diagnostic.js";
-import { installerFile, positionOf } from "../manifest.js";
+import { installerFile, isArchiveType, positionOf, stringOrUndefined } from "../manifest.js";
 import { defineRule } from "./rule.js";
 
 /**
@@ -25,8 +25,6 @@ import { defineRule } from "./rule.js";
  *   absent scope matches any scope — so an entry with no scope collides with
  *   one that says `machine`, not just with another that also omits it.
  */
-const ARCHIVE_TYPES = new Set(["zip"]);
-
 interface InstallerKey {
   architecture: string | undefined;
   type: string | undefined;
@@ -64,7 +62,7 @@ export default defineRule({
         architecture: stringOrUndefined(record["Architecture"]),
         type,
         locale: stringOrUndefined(record["InstallerLocale"]) ?? rootLocale,
-        nestedType: isArchive(type)
+        nestedType: isArchiveType(type)
           ? (stringOrUndefined(record["NestedInstallerType"]) ?? rootNestedType)
           : undefined,
         scope: stringOrUndefined(record["Scope"]) ?? rootScope,
@@ -101,14 +99,6 @@ function collides(a: InstallerKey, b: InstallerKey): boolean {
   if (a.nestedType !== b.nestedType) return false;
   if (a.scope !== undefined && b.scope !== undefined && a.scope !== b.scope) return false;
   return true;
-}
-
-function isArchive(type: string | undefined): boolean {
-  return type !== undefined && ARCHIVE_TYPES.has(type.toLowerCase());
-}
-
-function stringOrUndefined(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
 }
 
 /** Human-readable rendering of the key that made an entry a duplicate. */

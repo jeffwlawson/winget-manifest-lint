@@ -83,6 +83,25 @@ export function localeFiles(pkg: ManifestPackage): ManifestFile[] {
 }
 
 /**
+ * Installer types winget unpacks rather than runs directly. An archive requires
+ * `NestedInstallerType`/`NestedInstallerFiles`; a non-archive must not carry
+ * them. Kept in one place — and matched to winget-cli's archive set — so the
+ * rules that branch on it cannot silently disagree about which types are
+ * archives.
+ */
+const ARCHIVE_TYPES = new Set(["zip"]);
+
+/** Whether an installer type is an archive winget unpacks (case-insensitive). */
+export function isArchiveType(type: string | undefined): boolean {
+  return type !== undefined && ARCHIVE_TYPES.has(type.toLowerCase());
+}
+
+/** Narrow an arbitrary parsed-YAML value to a string, or undefined. */
+export function stringOrUndefined(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
  * Parse a version directory into a typed model.
  *
  * Never throws for bad input — a manifest being broken is the normal case this
