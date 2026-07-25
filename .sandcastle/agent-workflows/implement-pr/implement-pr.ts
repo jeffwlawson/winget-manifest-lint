@@ -15,8 +15,8 @@ try {
   // rejects. Refusing beats letting the agent invent work to do.
   if (!feedback.hasFeedback) {
     fail(
-      "No feedback from a repo collaborator (or our review agent) to act on. " +
-        "Comments from non-collaborators are deliberately ignored.",
+      "No unresolved feedback from a repo collaborator (or our review agent) to act on. " +
+        "Resolved threads and comments from non-collaborators are deliberately ignored.",
     );
   }
 

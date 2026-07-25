@@ -80,7 +80,11 @@ const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
  * "Bot"` in general — that would also trust Dependabot and any GitHub App an
  * admin installs, which is a far wider surface for a workflow that commits code.
  */
-const TRUSTED_BOT_LOGINS = new Set(["github-actions[bot]"]);
+// Both spellings on purpose: the REST API reports this account as
+// `github-actions[bot]`, GraphQL reports the same account as `github-actions`.
+// Listing only one silently drops our own review's comments on whichever path
+// uses the other.
+const TRUSTED_BOT_LOGINS = new Set(["github-actions[bot]", "github-actions"]);
 
 export const isTrustedAuthor = (association: string | undefined, login: string | undefined): boolean =>
   TRUSTED_ASSOCIATIONS.has(association ?? "") || TRUSTED_BOT_LOGINS.has(login ?? "");

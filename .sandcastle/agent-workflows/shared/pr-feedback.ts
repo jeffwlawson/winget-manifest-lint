@@ -1,83 +1,136 @@
-import { fetchTrustedComments, isTrustedAuthor, safeSh, sh } from "./common.js";
+import { gh, isTrustedAuthor, sh } from "./common.js";
 
 export interface PullRequestFeedback {
-  /** Review summary bodies (the text of each submitted review). */
+  /** Bodies of submitted reviews (the reviewer's overall note). */
   readonly summaries: string;
-  /** Inline review-thread comments, anchored to file + line. */
+  /** Comments in *unresolved* review threads, anchored to file + line, replies included. */
   readonly inline: string;
   /** Top-level conversation comments on the PR. */
   readonly conversation: string;
-  /** Diff of the branch against main, for orientation. */
+  /** All of the above rendered as one block, or "" when there is none. */
+  readonly all: string;
+  /** Diff of the branch against `main`. */
   readonly diff: string;
-  /** False when there is nothing trusted to act on — the caller should refuse. */
+  /** False when nothing trusted was found — callers should refuse rather than invent work. */
   readonly hasFeedback: boolean;
 }
 
 /**
- * Gather the feedback an `implement-pr` run should act on.
+ * One query for every feedback surface a PR has: conversation comments, review
+ * summaries, and review threads (whose `comments` include replies). Doing it in
+ * a single GraphQL round trip — rather than three REST calls — is what makes
+ * `isResolved` available, which REST does not expose at all.
+ */
+const QUERY = `
+query($owner:String!,$repo:String!,$number:Int!) {
+  repository(owner:$owner,name:$repo) {
+    pullRequest(number:$number) {
+      comments(first:100) { nodes { body author { login } authorAssociation } }
+      reviews(first:50) { nodes { body state author { login } authorAssociation } }
+      reviewThreads(first:100) {
+        nodes {
+          isResolved
+          comments(first:50) {
+            nodes { path line originalLine body author { login } authorAssociation }
+          }
+        }
+      }
+    }
+  }
+}`;
+
+interface GqlAuthored {
+  body?: string | null;
+  author?: { login?: string } | null;
+  authorAssociation?: string;
+}
+interface GqlThreadComment extends GqlAuthored {
+  path?: string | null;
+  line?: number | null;
+  originalLine?: number | null;
+}
+
+/** Trusted, non-empty, and rendered — the filter every surface shares. */
+const render = <T extends GqlAuthored>(
+  nodes: T[] | undefined,
+  format: (node: T, login: string) => string,
+): string =>
+  (nodes ?? [])
+    .filter((n) => isTrustedAuthor(n.authorAssociation, n.author?.login ?? undefined))
+    .filter((n) => (n.body ?? "").trim().length > 0)
+    .map((n) => format(n, n.author?.login ?? "unknown"))
+    .join("\n\n---\n\n");
+
+/**
+ * Gather the feedback on a PR, keeping only what a repo collaborator — or our
+ * own review agent — wrote.
  *
- * SECURITY: every source here is world-writable on a public repo — anyone can
- * comment on a PR or submit a review. Unlike the review workflow (which only
- * reads and posts text), this one runs with `contents: write` and pushes, so an
- * injection would steer *committed code*. Each source is therefore filtered
- * through `isTrustedAuthor`: repo collaborators, plus `github-actions[bot]`
- * because that is how our own review agent posts its findings.
+ * SECURITY: every surface here is world-writable on a public repo; anyone can
+ * comment on a PR or submit a review. `agent:fix` acts on this with
+ * `contents: write` and pushes, so an injection would steer *committed code*.
+ * The author gate is therefore load-bearing, not cosmetic. Read here rather
+ * than by the agent, whose GitHub token is scrubbed before it starts.
  *
- * Read here rather than by the agent so it never needs `gh` (the token is
- * scrubbed from its environment before it starts).
+ * Resolved threads are dropped: resolving a thread is how a human says "handled,
+ * ignore this", and re-feeding it would have the agent redo dismissed work.
  */
 export const fetchPullRequestFeedback = (prNumber: string): PullRequestFeedback => {
-  const ghRepo = process.env["GH_REPO"] ?? "";
+  const [owner = "", repo = ""] = (process.env["GH_REPO"] ?? "").split("/");
 
-  const parse = <T>(json: string, fallback: T): T => {
-    try {
-      return JSON.parse(json || "null") ?? fallback;
-    } catch {
-      return fallback;
-    }
-  };
+  let pr:
+    | {
+        comments?: { nodes?: GqlAuthored[] };
+        reviews?: { nodes?: (GqlAuthored & { state?: string })[] };
+        reviewThreads?: { nodes?: { isResolved?: boolean; comments?: { nodes?: GqlThreadComment[] } }[] };
+      }
+    | undefined;
+  try {
+    const raw = gh([
+      "api",
+      "graphql",
+      "-F",
+      `owner=${owner}`,
+      "-F",
+      `repo=${repo}`,
+      "-F",
+      `number=${prNumber}`,
+      "-f",
+      `query=${QUERY}`,
+    ]);
+    pr = JSON.parse(raw)?.data?.repository?.pullRequest;
+  } catch {
+    pr = undefined;
+  }
 
-  // 1. Review summaries — the body of each submitted review.
-  const reviews = parse<
-    { body?: string | null; state?: string; author_association?: string; user?: { login?: string } }[]
-  >(safeSh(`gh api repos/${ghRepo}/pulls/${prNumber}/reviews`), []);
-  const summaries = reviews
-    .filter((r) => isTrustedAuthor(r.author_association, r.user?.login))
-    .filter((r) => (r.body ?? "").trim().length > 0)
-    .map((r) => `**@${r.user?.login ?? "unknown"}** (${r.state ?? "COMMENTED"}):\n${(r.body ?? "").trim()}`)
-    .join("\n\n---\n\n");
+  const conversation = render(pr?.comments?.nodes, (n, login) => `**@${login}:**\n${(n.body ?? "").trim()}`);
 
-  // 2. Inline review-thread comments, anchored to a file and line. The REST
-  //    endpoint does not expose thread resolution; that (and replying) belongs
-  //    to the full workflow. Here they are read-only context.
-  const comments = parse<
-    {
-      body?: string;
-      path?: string;
-      line?: number | null;
-      original_line?: number | null;
-      author_association?: string;
-      user?: { login?: string };
-    }[]
-  >(safeSh(`gh api repos/${ghRepo}/pulls/${prNumber}/comments`), []);
-  const inline = comments
-    .filter((c) => isTrustedAuthor(c.author_association, c.user?.login))
-    .filter((c) => (c.body ?? "").trim().length > 0)
-    .map((c) => {
-      const where = `${c.path ?? "unknown"}:${c.line ?? c.original_line ?? "?"}`;
-      return `**${where}** (@${c.user?.login ?? "unknown"}):\n${(c.body ?? "").trim()}`;
-    })
-    .join("\n\n---\n\n");
+  const summaries = render(
+    pr?.reviews?.nodes,
+    (n, login) => `**@${login}** (${n.state ?? "COMMENTED"}):\n${(n.body ?? "").trim()}`,
+  );
 
-  // 3. Top-level conversation comments (the `issues/{n}/comments` endpoint
-  //    serves PRs too) — already collaborator-filtered.
-  const conversation = fetchTrustedComments(prNumber);
+  const unresolved = (pr?.reviewThreads?.nodes ?? [])
+    .filter((thread) => thread.isResolved !== true)
+    .flatMap((thread) => thread.comments?.nodes ?? []);
+  const inline = render(unresolved, (n, login) => {
+    const where = `${n.path ?? "unknown"}:${n.line ?? n.originalLine ?? "?"}`;
+    return `**${where}** (@${login}):\n${(n.body ?? "").trim()}`;
+  });
+
+  const all = [
+    summaries && `### Review summaries\n\n${summaries}`,
+    inline && `### Inline comments (unresolved threads)\n\n${inline}`,
+    conversation && `### Conversation\n\n${conversation}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   return {
     summaries,
     inline,
     conversation,
+    all,
     diff: sh("git diff main...HEAD"),
-    hasFeedback: Boolean(summaries || inline || conversation),
+    hasFeedback: all.length > 0,
   };
 };
