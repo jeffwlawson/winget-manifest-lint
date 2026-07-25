@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+
+PackageIdentifier: Contoso.NestedInstaller
+PackageVersion: 1.0.0
+PackageLocale: en-US
+Publisher: Contoso
+PackageName: NestedInstaller
+License: MIT
+ShortDescription: A zip installer missing the required NestedInstallerType and NestedInstallerFiles.
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

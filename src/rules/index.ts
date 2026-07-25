@@ -1,5 +1,6 @@
 import type { Rule } from "./rule.js";
 import installerEntryUnique from "./installer-entry-unique.js";
+import nestedInstallerCompatibility from "./nested-installer-compatibility.js";
 import packageIdentifierFormat from "./package-identifier-format.js";
 import packageVersionMatchesDirectory from "./package-version-matches-directory.js";
 import packageVersionPathSafe from "./package-version-path-safe.js";
@@ -16,6 +17,7 @@ import releaseDatePlausible from "./release-date-plausible.js";
  */
 export const rules: Rule[] = [
   installerEntryUnique,
+  nestedInstallerCompatibility,
   packageIdentifierFormat,
   packageVersionMatchesDirectory,
   packageVersionPathSafe,
