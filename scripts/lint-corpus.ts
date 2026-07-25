@@ -119,29 +119,56 @@ for (const dir of selected) {
 
 findings.sort(compareDiagnostics);
 
+/**
+ * Only **errors** fail the build.
+ *
+ * The oracle's premise is "Microsoft accepted this manifest, therefore it is
+ * valid, therefore any error we emit is a false positive." A *warning* makes no
+ * claim of invalidity — it means "a human might want to look at this" — so a
+ * warning firing on an accepted manifest is not necessarily a bug.
+ *
+ * The original gate failed on `findings.length === 0`, which counted warnings
+ * as failures and so made warning-severity rules structurally impossible: the
+ * first one written (`release-date-plausible`) immediately failed CI on four
+ * legitimately-old packages. Warnings are still reported below so a rule that
+ * goes haywire is visible in the log rather than silently ignored.
+ */
+const errors = findings.filter((d) => d.severity === "error");
+const warnings = findings.filter((d) => d.severity === "warning");
+
 console.log(`\nLinted ${linted} version directories.`);
-console.log(`Diagnostics: ${findings.length}.`);
+console.log(`Errors: ${errors.length}. Warnings: ${warnings.length}.`);
 
-if (findings.length === 0) {
-  console.log("\nClean. No rule fired against the corpus.");
+const report = (label: string, list: Diagnostic[]): void => {
+  if (list.length === 0) return;
+  console.log(`\n${label} (showing up to ${PRINT_LIMIT}):\n`);
+  for (const d of list.slice(0, PRINT_LIMIT)) {
+    const pos = d.position ? `:${d.position.line}:${d.position.column}` : "";
+    console.log(`  ${d.file}${pos}  ${d.severity}  ${d.message}  [${d.ruleId}]`);
+  }
+  if (list.length > PRINT_LIMIT) {
+    console.log(`  … and ${list.length - PRINT_LIMIT} more.`);
+  }
+
+  // Surface which rules are implicated, since that is what needs fixing.
+  const byRule = new Map<string, number>();
+  for (const d of list) byRule.set(d.ruleId, (byRule.get(d.ruleId) ?? 0) + 1);
+  console.log("\nBy rule:");
+  for (const [ruleId, count] of [...byRule.entries()].sort((a, b) => b[1] - a[1])) {
+    console.log(`  ${count.toString().padStart(6)}  ${ruleId}`);
+  }
+};
+
+report("ERRORS — each is a false positive to fix", errors);
+report("WARNINGS — advisory; review if the count looks wrong", warnings);
+
+if (errors.length === 0) {
+  console.log(
+    warnings.length === 0
+      ? "\nClean. No rule fired against the corpus."
+      : `\nNo errors. ${warnings.length} warning(s) reported above but not failing the build.`,
+  );
   process.exit(0);
-}
-
-console.log(`\nFirst ${Math.min(PRINT_LIMIT, findings.length)} diagnostic(s) — each is a false positive to fix:\n`);
-for (const d of findings.slice(0, PRINT_LIMIT)) {
-  const pos = d.position ? `:${d.position.line}:${d.position.column}` : "";
-  console.log(`  ${d.file}${pos}  ${d.severity}  ${d.message}  [${d.ruleId}]`);
-}
-if (findings.length > PRINT_LIMIT) {
-  console.log(`  … and ${findings.length - PRINT_LIMIT} more.`);
-}
-
-// Surface which rules are implicated, since that is what actually needs fixing.
-const byRule = new Map<string, number>();
-for (const d of findings) byRule.set(d.ruleId, (byRule.get(d.ruleId) ?? 0) + 1);
-console.log("\nBy rule:");
-for (const [ruleId, count] of [...byRule.entries()].sort((a, b) => b[1] - a[1])) {
-  console.log(`  ${count.toString().padStart(6)}  ${ruleId}`);
 }
 
 process.exit(1);

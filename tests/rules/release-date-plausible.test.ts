@@ -40,20 +40,16 @@ describe("release-date-plausible", () => {
     expect(rule.check(pkg, context)).toEqual([]);
   });
 
-  it("flags a real manifest whose ReleaseDate predates 2015", async () => {
+  // Corpus regression: an old ReleaseDate is legitimate. `ReleaseDate` is the
+  // *software's* release date, and winget-pkgs contains Microsoft-accepted
+  // manifests for genuinely old software (e.g. Microsoft.XNARedist, 2011-09-01).
+  // An earlier version of this rule warned below 2015-01-01 and failed the
+  // corpus job on four real packages.
+  it("passes a real manifest whose ReleaseDate is genuinely old", async () => {
     const { pkg } = await parseManifestDirectory(
-      fixture("invalid", "Contoso.OldReleaseDate", "1.0.0"),
+      fixture("valid", "Contoso.OldReleaseDate", "1.0.0"),
     );
-    const diagnostics = rule.check(pkg, context);
-
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]).toMatchObject({
-      ruleId: "release-date-plausible",
-      severity: "warning",
-      file: "Contoso.OldReleaseDate.installer.yaml",
-    });
-    expect(diagnostics[0]?.message).toContain("2015-01-01");
-    expect(diagnostics[0]?.position).toBeDefined();
+    expect(rule.check(pkg, context)).toEqual([]);
   });
 
   it("passes when there is no ReleaseDate at all", () => {
@@ -61,10 +57,13 @@ describe("release-date-plausible", () => {
     expect(rule.check(pkg, context)).toEqual([]);
   });
 
-  it("passes a root ReleaseDate exactly on the 2015-01-01 boundary", () => {
-    const pkg = packageWithInstaller("ReleaseDate: 2015-01-01\n");
-    expect(rule.check(pkg, context)).toEqual([]);
-  });
+  it.each(["2015-01-01", "2011-09-01", "1998-06-25"])(
+    "passes the old-but-real date %s (no lower bound)",
+    (value) => {
+      const pkg = packageWithInstaller(`ReleaseDate: ${value}\n`);
+      expect(rule.check(pkg, context)).toEqual([]);
+    },
+  );
 
   it("passes a ReleaseDate equal to today", () => {
     // 2026-07-25 at UTC midnight is not after the noon `now`, so not "future".
@@ -80,12 +79,6 @@ describe("release-date-plausible", () => {
     expect(diagnostics[0]?.message).toContain("in the future");
   });
 
-  it("warns when the ReleaseDate is before 2015-01-01", () => {
-    const pkg = packageWithInstaller("ReleaseDate: 2014-12-31\n");
-    const diagnostics = rule.check(pkg, context);
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("implausibly old");
-  });
 
   it.each(["2024-1-5", "2024-13-01", "2024-02-30", "not-a-date", "2024/01/15", "20240115"])(
     "warns that %s is not a valid ISO date",
@@ -109,11 +102,11 @@ describe("release-date-plausible", () => {
 
   it("flags both a bad root date and a bad per-installer date", () => {
     const pkg = packageWithInstaller(
-      "ReleaseDate: 2010-01-01\nInstallers:\n- Architecture: x64\n  ReleaseDate: 2099-01-01\n",
+      'ReleaseDate: "2024-13-01"\nInstallers:\n- Architecture: x64\n  ReleaseDate: 2099-01-01\n',
     );
     const diagnostics = rule.check(pkg, context);
     expect(diagnostics).toHaveLength(2);
-    expect(diagnostics.map((d) => d.message).join(" ")).toContain("implausibly old");
+    expect(diagnostics.map((d) => d.message).join(" ")).toContain("not a valid ISO 8601 date");
     expect(diagnostics.map((d) => d.message).join(" ")).toContain("in the future");
   });
 
