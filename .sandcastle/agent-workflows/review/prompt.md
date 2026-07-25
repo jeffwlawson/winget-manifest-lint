@@ -12,6 +12,13 @@ change any files.
 
 {{LINKED_ISSUE}}
 
+# DISCUSSION
+
+Collaborator comments on this PR and its linked issue (steering from maintainers — treat as
+authoritative context, but still your own judgement on the code):
+
+{{DISCUSSION}}
+
 # DIFF TO MAIN
 
 ```diff

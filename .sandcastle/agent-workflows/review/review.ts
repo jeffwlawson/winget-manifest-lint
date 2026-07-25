@@ -39,6 +39,7 @@ try {
       ISSUE_NUMBER: context.issueNumber || "(none)",
       ISSUE_TITLE: context.issueTitle || "(no linked issue)",
       LINKED_ISSUE: context.linkedIssue,
+      DISCUSSION: context.discussion || "(no collaborator comments)",
       DIFF_TO_MAIN: context.diff,
     },
     output: sandcastle.Output.object({ tag: "output", schema: reviewOutputSchema }),

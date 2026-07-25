@@ -102,6 +102,33 @@ export const fetchTrustedIssue = (issueNumber: string): TrustedIssue => {
   return { title: parsed.title ?? "", body: (parsed.body ?? "").trim(), trusted: true };
 };
 
+/**
+ * Fetch the conversation comments on an issue or PR, keeping ONLY those authored
+ * by a repo collaborator (same trust boundary as `fetchTrustedIssue`). This is
+ * what lets a maintainer steer the agent with a comment; a drive-by comment from
+ * a non-collaborator is dropped. Returns "" when there are none.
+ *
+ * The `issues/{n}/comments` endpoint serves both issues and PRs (a PR is an
+ * issue for this endpoint). It does NOT include inline review-thread comments —
+ * those are a separate surface handled by the full review workflow, and would
+ * need the same author gate. Only the first page (~30, oldest-first) is read;
+ * that is plenty for steering and avoids pulling a huge thread into the prompt.
+ */
+export const fetchTrustedComments = (number: string): string => {
+  const ghRepo = process.env["GH_REPO"] ?? "";
+  let comments: { body?: string; author_association?: string; user?: { login?: string } }[] = [];
+  try {
+    comments = JSON.parse(safeSh(`gh api repos/${ghRepo}/issues/${number}/comments`) || "[]");
+  } catch {
+    comments = [];
+  }
+  return comments
+    .filter((c) => TRUSTED_ASSOCIATIONS.has(c.author_association ?? ""))
+    .map((c) => `**@${c.user?.login ?? "unknown"}:**\n${(c.body ?? "").trim()}`)
+    .filter((text) => text.trim().length > 0)
+    .join("\n\n---\n\n");
+};
+
 export const writeJson = (filename: string, value: unknown): void => {
   fs.mkdirSync(outputDir(), { recursive: true });
   fs.writeFileSync(path.join(outputDir(), filename), JSON.stringify(value, null, 2));

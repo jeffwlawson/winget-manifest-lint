@@ -511,6 +511,18 @@ separate control (`contents: read` on review).
 The compounding lesson: the boundary is never "which field" — it is "who can write this input,"
 and the answer terminates at author association. Each fix, reviewed, revealed the next door.
 
+**Refinement (same day): don't throw out the baby.** "Drop all comments" was blunter than
+security requires — it also discarded *maintainer* steering, which is the base repo's whole
+iteration model. Restored precisely: `fetchTrustedComments` reads issue/PR conversation comments
+but keeps only collaborator-authored ones (same `authorAssociation` gate). A maintainer can steer
+the agent with a comment again; a drive-by comment is still dropped. Deliberately *not* restored:
+inline review-thread comments (that's the full workflow) and pagination (first ~30 is plenty —
+adding page-walking would be complexity for no security or real usability gain). One open
+decision this surfaces for the multi-agent future: agents post as `github-actions[bot]`, which is
+not a collaborator, so an agent-to-agent handoff *through comments* would need the trusted set to
+explicitly include our own agent identity (or post under `AGENT_PAT`). Moot today — nothing reads
+agent comments yet — but it's the "define the agent trust identity" decision, now written down.
+
 ## 2026-07-23 — The irreducible residual: noSandbox, egress, and exfiltration
 
 After author-gating every text input, here is what remains and what closing it would cost.

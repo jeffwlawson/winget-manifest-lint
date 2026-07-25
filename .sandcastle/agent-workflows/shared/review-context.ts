@@ -1,4 +1,4 @@
-import { fetchTrustedIssue, gh, sh } from "./common.js";
+import { fetchTrustedComments, fetchTrustedIssue, gh, sh } from "./common.js";
 import { parseDiffLines } from "./diff-lines.js";
 
 export interface PullRequestContext {
@@ -7,6 +7,8 @@ export interface PullRequestContext {
   readonly issueNumber: string;
   readonly issueTitle: string;
   readonly linkedIssue: string;
+  /** Collaborator-authored conversation comments on the PR and linked issue. */
+  readonly discussion: string;
   readonly diff: string;
   readonly diffLines: Map<string, Set<number>>;
 }
@@ -47,6 +49,19 @@ export const fetchPullRequestContext = (prNumber: string): PullRequestContext =>
     }
   }
 
+  // Collaborator conversation comments on the PR and (if any) the linked issue —
+  // author-gated the same way, so a maintainer's review steering is included and
+  // world-writable comments are not. Inline review-thread comments are NOT read
+  // here; those belong to the full workflow and need the same gate.
+  const prComments = fetchTrustedComments(prNumber);
+  const issueComments = issueNumber ? fetchTrustedComments(issueNumber) : "";
+  const discussion = [
+    prComments && `### On the PR\n\n${prComments}`,
+    issueComments && `### On the linked issue\n\n${issueComments}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
   // `main` is fetched as a local ref by the workflow before this runs. Use the
   // three-dot diff (changes since the merge-base) only — no two-dot fallback,
   // which has different semantics and would silently mis-filter inline comments.
@@ -59,6 +74,7 @@ export const fetchPullRequestContext = (prNumber: string): PullRequestContext =>
     issueNumber,
     issueTitle,
     linkedIssue,
+    discussion,
     diff,
     diffLines: parseDiffLines(diff),
   };
