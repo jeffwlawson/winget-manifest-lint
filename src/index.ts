@@ -19,4 +19,4 @@ export { lintDirectory } from "./lint.js";
 export type { LintOptions } from "./lint.js";
 
 export { defineRule, rules } from "./rules/index.js";
-export type { Rule } from "./rules/rule.js";
+export type { Rule, RuleContext } from "./rules/rule.js";

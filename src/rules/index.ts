@@ -3,6 +3,7 @@ import installerEntryUnique from "./installer-entry-unique.js";
 import packageIdentifierFormat from "./package-identifier-format.js";
 import packageVersionMatchesDirectory from "./package-version-matches-directory.js";
 import packageVersionPathSafe from "./package-version-path-safe.js";
+import releaseDatePlausible from "./release-date-plausible.js";
 
 /**
  * The rule registry.
@@ -18,7 +19,8 @@ export const rules: Rule[] = [
   packageIdentifierFormat,
   packageVersionMatchesDirectory,
   packageVersionPathSafe,
+  releaseDatePlausible,
 ];
 
 export { defineRule } from "./rule.js";
-export type { Rule } from "./rule.js";
+export type { Rule, RuleContext } from "./rule.js";

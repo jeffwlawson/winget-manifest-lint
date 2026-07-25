@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+
+PackageIdentifier: Contoso.ReleaseDate
+PackageVersion: 1.0.0
+PackageLocale: en-US
+Publisher: Contoso
+PackageName: ReleaseDate
+License: MIT
+ShortDescription: A tool whose installer carries a plausible ReleaseDate.
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
