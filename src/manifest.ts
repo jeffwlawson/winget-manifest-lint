@@ -84,10 +84,10 @@ export function localeFiles(pkg: ManifestPackage): ManifestFile[] {
 
 /**
  * Installer types winget unpacks rather than runs directly. An archive requires
- * `NestedInstallerType`/`NestedInstallerFiles`; a non-archive must not carry
- * them. Kept in one place — and matched to winget-cli's archive set — so the
- * rules that branch on it cannot silently disagree about which types are
- * archives.
+ * `NestedInstallerType`/`NestedInstallerFiles`; a non-archive may still carry
+ * them, but winget ignores them rather than rejecting. Kept in one place — and
+ * matched to winget-cli's archive set — so the rules that branch on it cannot
+ * silently disagree about which types are archives.
  */
 const ARCHIVE_TYPES = new Set(["zip"]);
 
