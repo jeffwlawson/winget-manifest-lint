@@ -11,8 +11,10 @@ winget-manifest-lint manifests/s/sharkdp/bat/0.26.1/
 
 ## Status
 
-Early. See [CONTEXT.md](./CONTEXT.md) for the domain model and
-[docs/friction.md](./docs/friction.md) for the build log.
+Early. See [CONTEXT.md](./CONTEXT.md) for the domain model,
+[docs/friction.md](./docs/friction.md) for the build log, and
+[docs/parity.md](./docs/parity.md) for how this repo's agent loop compares to the one it was
+modelled on.
 
 ## Non-goals
 
