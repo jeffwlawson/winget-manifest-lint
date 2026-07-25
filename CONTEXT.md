@@ -77,6 +77,18 @@ Microsoft accepted them. **Any diagnostic we emit against that corpus is by defi
 positive in one of our rules.** That gives us a free pre-labelled regression suite, but only if
 rules are fast and deterministic enough to run across all of it in CI.
 
+### The clock is injected, never read
+
+Some rules must reason about *now* — `release-date-plausible` warns when a `ReleaseDate` is in
+the future. A rule that called `new Date()` itself would be non-deterministic and could not run
+against the corpus, so the current time is passed in instead. `check` takes an optional second
+argument, a `RuleContext { now: Date }`. `lintDirectory` reads the clock exactly once (its one
+impure boundary — it already does I/O) and threads the same `now` to every rule; callers may
+override it via `LintOptions.now`, which is what the tests do to get a fixed clock. The argument
+is optional so the many clock-independent rules stay `check(pkg)`; a clock-dependent rule that
+is handed no context simply stays silent rather than inventing a time. If a future rule needs
+another ambient value that a pure function cannot compute, add it to `RuleContext` the same way.
+
 ## Non-goals
 
 - Not a generator. Komac does that.

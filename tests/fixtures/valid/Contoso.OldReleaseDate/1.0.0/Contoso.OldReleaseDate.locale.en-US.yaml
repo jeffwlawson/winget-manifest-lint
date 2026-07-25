@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+
+PackageIdentifier: Contoso.OldReleaseDate
+PackageVersion: 1.0.0
+PackageLocale: en-US
+Publisher: Contoso
+PackageName: OldReleaseDate
+License: MIT
+ShortDescription: A tool whose installer claims a release date from before winget existed.
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
