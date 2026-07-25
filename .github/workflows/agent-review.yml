@@ -64,10 +64,75 @@ jobs:
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
+      # Wait for the PR's other checks, then hand their results to the agent.
+      #
+      # Why: a review running while CI is still going has no evidence beyond the
+      # diff, so it reasons from the issue's spec. That is exactly how a review
+      # once certified a rule "corpus-safe" 96 seconds before the corpus failed
+      # with 13 false positives from that very rule. Waiting alone would not have
+      # helped — the *results* have to reach the prompt.
+      #
+      # This job is itself a check on the PR, so `gh pr checks --watch` would
+      # deadlock waiting on itself. Poll the check-runs API excluding our own
+      # job name instead. Never fails the run: missing CI context degrades the
+      # review, it does not invalidate it.
+      - name: Wait for other checks, collect results
+        continue-on-error: true
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SELF_CHECK: review
+          WAIT_SECONDS: "900"
+        run: |
+          set -uo pipefail
+          out="${RUNNER_TEMP}/ci_status.md"
+          : > "$out"
+
+          pending_count() {
+            gh api "repos/${GH_REPO}/commits/${HEAD_SHA}/check-runs" --paginate \
+              --jq "[.check_runs[] | select(.name != \"${SELF_CHECK}\") | select(.status != \"completed\")] | length" \
+              2>/dev/null || echo 0
+          }
+
+          deadline=$(( $(date +%s) + WAIT_SECONDS ))
+          while :; do
+            pending=$(pending_count)
+            [ "${pending:-0}" -eq 0 ] && break
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "_Timed out waiting for ${pending} check(s); results below may be incomplete._" >> "$out"
+              break
+            fi
+            echo "Waiting for ${pending} check(s)…"
+            sleep 20
+          done
+
+          echo "Checks on this commit:" >> "$out"
+          gh api "repos/${GH_REPO}/commits/${HEAD_SHA}/check-runs" --paginate \
+            --jq ".check_runs[] | select(.name != \"${SELF_CHECK}\") | \"- \(.name): \(.conclusion // .status)\"" \
+            >> "$out" 2>/dev/null || echo "- (could not read check runs)" >> "$out"
+
+          # Tail the failing steps so the agent sees *what* failed, not merely
+          # that something did. Capped so a noisy failure cannot swamp the prompt.
+          for rid in $(gh api "repos/${GH_REPO}/actions/runs?head_sha=${HEAD_SHA}&per_page=50" \
+                        --jq '.workflow_runs[] | select(.conclusion == "failure") | .id' 2>/dev/null); do
+            rname=$(gh api "repos/${GH_REPO}/actions/runs/${rid}" --jq .name 2>/dev/null || echo "run ${rid}")
+            [ "$rname" = "Agent Review" ] && continue
+            {
+              echo
+              echo "### Failure output — ${rname}"
+              echo '```'
+              gh run view "$rid" --log-failed 2>/dev/null | sed 's/^[^Z]*Z //' | tail -60
+              echo '```'
+            } >> "$out"
+          done
+
+          echo "--- collected CI context ---"
+          cat "$out"
+
       - name: Run review agent
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           OUTPUT_DIR: ${{ runner.temp }}
+          CI_STATUS_FILE: ${{ runner.temp }}/ci_status.md
         run: npx tsx .sandcastle/agent-workflows/review/review.ts
 
       - name: Post PR review
