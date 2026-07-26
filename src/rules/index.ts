@@ -1,6 +1,8 @@
 import type { Rule } from "./rule.js";
+import architectureEnum from "./architecture-enum.js";
 import installerEntryUnique from "./installer-entry-unique.js";
 import installerSha256Format from "./installer-sha256-format.js";
+import installersNonEmpty from "./installers-non-empty.js";
 import nestedInstallerCompatibility from "./nested-installer-compatibility.js";
 import packageIdentifierFormat from "./package-identifier-format.js";
 import packageVersionMatchesDirectory from "./package-version-matches-directory.js";
@@ -17,8 +19,10 @@ import releaseDatePlausible from "./release-date-plausible.js";
  * Keep the array ordered by rule id so diffs stay readable.
  */
 export const rules: Rule[] = [
+  architectureEnum,
   installerEntryUnique,
   installerSha256Format,
+  installersNonEmpty,
   nestedInstallerCompatibility,
   packageIdentifierFormat,
   packageVersionMatchesDirectory,
