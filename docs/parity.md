@@ -170,9 +170,12 @@ silently do nothing.
 
 ## 9. If we closed the gaps, in order
 
+Ranked by value per unit of risk, not by size. Anything that widens an agent's write access sits
+below everything that does not, regardless of how useful it looks.
+
 1. **`agent-update-branch`** (📋) — small, no new risk surface, solves a real annoyance.
-2. **Auto-cascade implement → review** (📋) — one step with `AGENT_PAT`; removes a manual label.
-3. **Composite action for setup** (📋) — pure cleanup, now that three workflows duplicate it.
+2. **Composite action for setup** (📋) — pure cleanup, now that three workflows duplicate it.
+3. **Auto-cascade implement → review** (📋) — one step with `AGENT_PAT`; removes a manual label.
 4. **Mark PR ready after review** (❌, trivial).
 5. **Review/fix conversational replies** (❌) — the largest UX gain; a second output schema.
 6. **Review self-improvement** (❌) — biggest capability gain, but flips review to
