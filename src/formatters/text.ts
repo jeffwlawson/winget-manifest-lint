@@ -1,8 +1,8 @@
-import { compareDiagnostics, type Diagnostic } from "./diagnostic.js";
+import { compareDiagnostics, type Diagnostic } from "../diagnostic.js";
 
 /**
- * Render diagnostics for a terminal. Output is plain ASCII with no colour so it
- * stays snapshot-testable; a colour layer, if it ever exists, wraps this.
+ * Render diagnostics for a terminal. Output carries no ANSI colour so it stays
+ * snapshot-testable; a colour layer, if it ever exists, wraps this.
  *
  * Each diagnostic is one line:
  *
@@ -12,7 +12,7 @@ import { compareDiagnostics, type Diagnostic } from "./diagnostic.js";
  * ends with a summary counting errors and warnings. An unpositioned diagnostic
  * — one about a file as a whole — renders without the `:line:col`.
  */
-export function formatDiagnostics(diagnostics: Diagnostic[]): string {
+export function formatText(diagnostics: readonly Diagnostic[]): string {
   if (diagnostics.length === 0) return "No problems found.\n";
 
   const sorted = [...diagnostics].sort(compareDiagnostics);

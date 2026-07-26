@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Diagnostic } from "../src/diagnostic.js";
-import { formatDiagnostics } from "../src/format.js";
+import type { Diagnostic } from "../../src/diagnostic.js";
+import { formatText } from "../../src/formatters/text.js";
 
 const diag = (over: Partial<Diagnostic> = {}): Diagnostic => ({
   ruleId: "some-rule",
@@ -10,9 +10,9 @@ const diag = (over: Partial<Diagnostic> = {}): Diagnostic => ({
   ...over,
 });
 
-describe("formatDiagnostics", () => {
+describe("formatText", () => {
   it("renders a positioned diagnostic as file:line:col  severity  message  [rule-id]", () => {
-    const out = formatDiagnostics([
+    const out = formatText([
       diag({
         file: "Publisher.Package.installer.yaml",
         position: { line: 12, column: 5 },
@@ -27,7 +27,7 @@ describe("formatDiagnostics", () => {
   });
 
   it("omits :line:col for an unpositioned diagnostic", () => {
-    const out = formatDiagnostics([
+    const out = formatText([
       diag({ file: "Publisher.Package.yaml", message: "file is missing", ruleId: "installers-non-empty" }),
     ]);
     expect(out).toContain("Publisher.Package.yaml  error  file is missing  [installers-non-empty]");
@@ -35,7 +35,7 @@ describe("formatDiagnostics", () => {
   });
 
   it("groups diagnostics by file, separated by a blank line", () => {
-    const out = formatDiagnostics([
+    const out = formatText([
       diag({ file: "a.yaml", position: { line: 1, column: 1 }, ruleId: "r1" }),
       diag({ file: "b.yaml", position: { line: 2, column: 2 }, ruleId: "r2" }),
     ]);
@@ -48,7 +48,7 @@ describe("formatDiagnostics", () => {
   });
 
   it("sorts diagnostics into a stable order regardless of input order", () => {
-    const out = formatDiagnostics([
+    const out = formatText([
       diag({ file: "b.yaml", position: { line: 1, column: 1 }, ruleId: "r2" }),
       diag({ file: "a.yaml", position: { line: 9, column: 1 }, ruleId: "r1" }),
       diag({ file: "a.yaml", position: { line: 1, column: 1 }, ruleId: "r0" }),
@@ -61,7 +61,7 @@ describe("formatDiagnostics", () => {
   });
 
   it("ends with a summary line counting errors and warnings", () => {
-    const out = formatDiagnostics([
+    const out = formatText([
       diag({ severity: "error" }),
       diag({ severity: "error" }),
       diag({ severity: "warning" }),
@@ -70,11 +70,11 @@ describe("formatDiagnostics", () => {
   });
 
   it("pluralises the summary counts correctly", () => {
-    const out = formatDiagnostics([diag({ severity: "warning" })]);
+    const out = formatText([diag({ severity: "warning" })]);
     expect(out.trimEnd().endsWith("0 errors, 1 warning")).toBe(true);
   });
 
   it("reports a clean run when there are no diagnostics", () => {
-    expect(formatDiagnostics([])).toBe("No problems found.\n");
+    expect(formatText([])).toBe("No problems found.\n");
   });
 });
