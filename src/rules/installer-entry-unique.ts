@@ -1,5 +1,11 @@
 import type { Diagnostic } from "../diagnostic.js";
-import { installerFile, isArchiveType, positionOf, stringOrUndefined } from "../manifest.js";
+import {
+  canonicalArchitecture,
+  installerFile,
+  isArchiveType,
+  positionOf,
+  stringOrUndefined,
+} from "../manifest.js";
 import { defineRule } from "./rule.js";
 
 /**
@@ -59,7 +65,7 @@ export default defineRule({
 
       const type = stringOrUndefined(record["InstallerType"]) ?? rootType;
       const key: InstallerKey = {
-        architecture: stringOrUndefined(record["Architecture"]),
+        architecture: canonicalArchitecture(stringOrUndefined(record["Architecture"])),
         type,
         locale: stringOrUndefined(record["InstallerLocale"]) ?? rootLocale,
         nestedType: isArchiveType(type)

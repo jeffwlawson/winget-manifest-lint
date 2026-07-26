@@ -96,6 +96,39 @@ export function isArchiveType(type: string | undefined): boolean {
   return type !== undefined && ARCHIVE_TYPES.has(type.toLowerCase());
 }
 
+/**
+ * The architectures winget recognises, spelled exactly as its manifest schema
+ * requires — lower-case. winget-cli parses `Architecture` into a fixed enum and
+ * rejects anything else, so this is the single source of truth for the allowed
+ * set: the `architecture-enum` rule validates against it, and
+ * `installer-entry-unique` folds it in to canonicalise architectures before
+ * comparing installer keys. Keeping the list in one place stops the two rules
+ * from silently disagreeing about what counts as an architecture.
+ */
+export const ARCHITECTURES = ["x86", "x64", "arm", "arm64", "neutral"] as const;
+
+export type Architecture = (typeof ARCHITECTURES)[number];
+
+const ARCHITECTURE_SET: ReadonlySet<string> = new Set(ARCHITECTURES);
+
+/** Whether a value is an allowed architecture, spelled exactly (case-sensitive). */
+export function isKnownArchitecture(value: string): value is Architecture {
+  return ARCHITECTURE_SET.has(value);
+}
+
+/**
+ * Canonicalise an architecture for comparison. winget's architecture lookup is
+ * case-insensitive, so `x64` and `X64` name the same installer and must not
+ * look distinct when de-duplicating installer keys. Only case variants of a
+ * known architecture are folded; an unrecognised value is left untouched so the
+ * `architecture-enum` rule can report it verbatim.
+ */
+export function canonicalArchitecture(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const lower = value.toLowerCase();
+  return isKnownArchitecture(lower) ? lower : value;
+}
+
 /** Narrow an arbitrary parsed-YAML value to a string, or undefined. */
 export function stringOrUndefined(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;

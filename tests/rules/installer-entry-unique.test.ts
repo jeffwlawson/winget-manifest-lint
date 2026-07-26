@@ -83,6 +83,16 @@ describe("installer-entry-unique", () => {
     expect(rule.check(pkg)).toHaveLength(1);
   });
 
+  it("treats case variants of one architecture as the same installer", () => {
+    // winget's architecture lookup is case-insensitive, so x64 and X64 name the
+    // same installer and collide — the shared ARCHITECTURES enum canonicalises
+    // them before comparison.
+    const pkg = packageWithInstaller(
+      "InstallerType: msi\nInstallers:\n- Architecture: x64\n- Architecture: X64\n",
+    );
+    expect(rule.check(pkg)).toHaveLength(1);
+  });
+
   it("passes when scope disambiguates otherwise-identical installers", () => {
     const pkg = packageWithInstaller(
       "InstallerType: msi\nInstallers:\n- Architecture: x64\n  Scope: user\n- Architecture: x64\n  Scope: machine\n",
