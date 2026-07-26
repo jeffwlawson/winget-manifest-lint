@@ -903,12 +903,19 @@ status would have been tidiness for its own sake.
 The full cycle is proven, including replies, resolution, and conflict resolution. Still
 unexercised or outstanding:
 
-- **Stale agent scripts still fail silently.** `agent-update-branch` can now *fix* a stale branch,
-  but nothing *detects* one. The cure fits the disease: a check written in the **YAML** is always
-  current even when the scripts it guards are stale, so review/fix could compare the PR head's
-  `.sandcastle/` against `main` and refuse loudly. Nothing automatically applies
-  `agent:update-branch` — in this repo or in CVM — and making the failure loud is cheaper and
-  safer than automating the mutation.
+- **Stale agent scripts still fail silently — accepted, not fixed.** `agent-update-branch` can now
+  *fix* a stale branch, but nothing *detects* one, and nothing applies the label automatically (in
+  this repo or in CVM). Labelling by hand is the current answer.
+
+  Deliberate: this has bitten exactly once, and was caught. Building detection now would be
+  designing against a hypothesis. If it recurs, the design is already worked out — a check in the
+  **YAML**, which is always current even when the scripts it guards are stale, comparing the PR
+  head against `main` for two different things: `.sandcastle/**` differing means the tooling is
+  wrong and the run should **refuse**; `CONTEXT.md`/`CLAUDE.md` differing means the agent is
+  applying superseded *conventions*, which should be **reported into the prompt** rather than
+  refused. Deliberately not "is the branch behind `main`" — that is true of nearly every PR nearly
+  always, and a check that always fires is one nobody reads. Ordinary `src/` divergence is what
+  GitHub's own "require branches up to date" setting is for.
 - **`agent:fix`'s refusal path has never run.** Every fix run so far had feedback to act on. The
   "no trusted feedback" refusal is implemented but untested.
 - **Shared-setup extraction still pending.** Four workflows now duplicate
