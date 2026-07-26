@@ -110,6 +110,7 @@ jobs:
 
       - name: Open draft PR
         if: steps.preflight.outputs.refused == 'false' && success()
+        id: open_pr
         env:
           BRANCH: ${{ steps.branch.outputs.name }}
           # gh reads GH_TOKEN from the env. The job-level GH_TOKEN is the
@@ -128,8 +129,33 @@ jobs:
             echo
             echo "Implemented by the \`agent:implement\` workflow."
           } > "$body_file"
-          gh pr create --draft --base main --head "$BRANCH" \
-            --title "${title:0:256}" --body-file "$body_file"
+          pr_url=$(gh pr create --draft --base main --head "$BRANCH" \
+            --title "${title:0:256}" --body-file "$body_file" | tail -n1)
+          echo "number=$(basename "$pr_url")" >> "$GITHUB_OUTPUT"
+          echo "Opened $pr_url"
+
+      # Cascade: every agent PR gets reviewed without a human labelling it.
+      #
+      # Safe because it is exactly one hop — agent-review.yml adds no trigger
+      # label of its own, so this cannot cycle. The corresponding invariant
+      # (never auto-cascade review -> fix) is recorded in docs/parity.md §10;
+      # breaking it would close the loop with no human gate.
+      #
+      # MUST use AGENT_PAT: a label added with GITHUB_TOKEN does not trigger
+      # further workflows, so the label would appear and nothing would happen —
+      # a silent no-op. Warn loudly rather than pretend it worked.
+      - name: Request review
+        if: steps.preflight.outputs.refused == 'false' && success()
+        env:
+          NEW_PR: ${{ steps.open_pr.outputs.number }}
+          HAS_PAT: ${{ secrets.AGENT_PAT != '' }}
+          GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          gh pr edit "$NEW_PR" --add-label "agent:review"
+          if [ "$HAS_PAT" != "true" ]; then
+            echo "::warning::AGENT_PAT is not set, so this label was added with GITHUB_TOKEN and will NOT trigger agent-review. Add agent:review by hand on PR #${NEW_PR}."
+          fi
 
       - name: Mark blocked on failure
         if: steps.preflight.outputs.refused == 'false' && failure()
