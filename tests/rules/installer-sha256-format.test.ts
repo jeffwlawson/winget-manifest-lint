@@ -103,6 +103,30 @@ describe("installer-sha256-format", () => {
     expect(diagnostics[0]?.message).toContain("InstallerSha256");
   });
 
+  it("skips a msstore installer, which carries no hash by design", () => {
+    const pkg = packageWithInstaller(
+      "Installers:\n- Architecture: x64\n  InstallerType: msstore\n  MSStoreProductIdentifier: 9WZDNCRFHVN5\n",
+    );
+    expect(rule.check(pkg)).toEqual([]);
+  });
+
+  it("skips a msstore installer whose type is a root-level default", () => {
+    const pkg = packageWithInstaller(
+      "InstallerType: msstore\nInstallers:\n- Architecture: x64\n  MSStoreProductIdentifier: 9WZDNCRFHVN5\n",
+    );
+    expect(rule.check(pkg)).toEqual([]);
+  });
+
+  it("still checks a non-msstore installer sharing a msstore file", () => {
+    const pkg = packageWithInstaller(
+      "Installers:\n- Architecture: x64\n  InstallerType: msstore\n  MSStoreProductIdentifier: 9WZDNCRFHVN5\n- Architecture: x86\n  InstallerType: msi\n  InstallerUrl: https://example.com/tool.msi\n",
+    );
+    const diagnostics = rule.check(pkg);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("entry 1");
+    expect(diagnostics[0]?.message).toContain("missing InstallerSha256");
+  });
+
   it("reports each offending installer independently", () => {
     const pkg = packageWithInstaller(
       `Installers:\n- Architecture: x64\n  InstallerSha256: ${HASH}\n- Architecture: x86\n  InstallerSha256: short\n- Architecture: arm64\n`,

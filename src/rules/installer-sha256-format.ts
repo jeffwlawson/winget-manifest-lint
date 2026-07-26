@@ -1,5 +1,5 @@
 import type { Diagnostic } from "../diagnostic.js";
-import { installerFile, positionOf } from "../manifest.js";
+import { installerFile, positionOf, stringOrUndefined } from "../manifest.js";
 import { defineRule } from "./rule.js";
 
 /**
@@ -14,6 +14,13 @@ import { defineRule } from "./rule.js";
  * has no root-level default — so we walk `Installers` and check each entry,
  * pointing the diagnostic at `Installers[i].InstallerSha256` (or the entry
  * itself when the key is missing entirely).
+ *
+ * One exception: a `msstore` installer references a Microsoft Store product via
+ * `MSStoreProductIdentifier` and downloads nothing, so winget's schema requires
+ * *no* `InstallerSha256` for it. Such an entry has nothing to hash, so we skip
+ * it — otherwise a valid Store manifest would draw a false positive. Like the
+ * other installer fields, `InstallerType` can be a root default overridden per
+ * installer, so we resolve each entry's *effective* type before deciding.
  */
 const SHA256 = /^[0-9a-fA-F]{64}$/;
 
@@ -27,11 +34,19 @@ export default defineRule({
     const installers = file.data["Installers"];
     if (!Array.isArray(installers)) return [];
 
+    const rootType = stringOrUndefined(file.data["InstallerType"]);
+
     const diagnostics: Diagnostic[] = [];
 
     installers.forEach((entry, index) => {
       if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return;
-      const value = (entry as Record<string, unknown>)["InstallerSha256"];
+      const record = entry as Record<string, unknown>;
+
+      // A msstore installer downloads nothing and carries no hash by design.
+      const type = stringOrUndefined(record["InstallerType"]) ?? rootType;
+      if (type?.toLowerCase() === "msstore") return;
+
+      const value = record["InstallerSha256"];
 
       if (typeof value === "string" && SHA256.test(value)) return;
 
