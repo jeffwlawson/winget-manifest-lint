@@ -201,7 +201,7 @@ expensive to rediscover.
   adds no trigger label, so every round still needs a human `agent:fix`. Automating the return leg
   closes a true cycle with no gate.
 - **Review stays `contents: read`.** It is the one agent that cannot mutate the branch, and that
-  is what bounds the damage a wrong review can do. Adding self-improvement (§9.6) forfeits this
+  is what bounds the damage a wrong review can do. Adding self-improvement (§9.5) forfeits this
   and also requires moving review into the `agent-mutate-pr-*` concurrency group.
 - **Only `addressed` resolves a thread.** A `declined` thread keeps its reply and stays open, so a
   human can push back; auto-resolving a decline lets an agent bury a disagreement silently.
