@@ -20,3 +20,5 @@ export type { LintOptions } from "./lint.js";
 
 export { defineRule, rules } from "./rules/index.js";
 export type { Rule, RuleContext } from "./rules/rule.js";
+
+export { formatGithubActions } from "./formatters/github-actions.js";
