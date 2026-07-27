@@ -67,6 +67,19 @@ Positions come from `positionOf(file, path)`, which resolves a path like
 `["Installers", 1, "InstallerSha256"]` against the YAML CST. A rule that reports a *missing*
 key legitimately has no position; that is why `position` is optional.
 
+## Formatters
+
+A rule produces diagnostics; a *formatter* renders them for a destination. Formatters live in
+`src/formatters/<name>.ts`, one per output shape, named `format<Name>` (e.g. `formatText`,
+`formatGithubActions`). The `<name>` matches the `--format` flag value the CLI exposes, so the
+export name and the flag line up rather than needing a lookup.
+
+A formatter takes `readonly Diagnostic[]` and returns a `string`. Like rules, it is pure — no
+I/O, no throwing, no side effects — and adds no dependencies. `readonly` signals it never
+mutates its input; sort a copy (`[...diagnostics]`) if you need order. Rely on
+`compareDiagnostics` for that order so same-file diagnostics stay contiguous. Emit no ANSI colour
+so output stays snapshot-testable.
+
 ## Rules are pure
 
 No I/O, no network, no clock. A rule receives a parsed `ManifestPackage` and returns an array.
