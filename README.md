@@ -9,6 +9,28 @@ them — offline, with no network access — and reports precise, positioned dia
 winget-manifest-lint manifests/s/sharkdp/bat/0.26.1/
 ```
 
+## Usage
+
+```
+winget-manifest-lint [--format text|github] [--strict] <dir>...
+```
+
+Accepts one or more manifest version directories.
+
+| Option | Effect |
+|---|---|
+| `--format text` | Human-readable report (the default). |
+| `--format github` | GitHub Actions annotation commands, for inline PR annotations. |
+| `--strict` | Promote warnings to errors. |
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | No errors. Warnings alone (without `--strict`) still exit `0`. |
+| `1` | Errors found. With `--strict`, warnings are promoted and count here too. |
+| `2` | Bad usage, or an input directory could not be read. |
+
 ## Status
 
 Early. See [CONTEXT.md](./CONTEXT.md) for the domain model,
