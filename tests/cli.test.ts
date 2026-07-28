@@ -95,6 +95,18 @@ describe("run", () => {
     expect(strict.out).not.toContain("warning  iffy");
   });
 
+  it("exits 0 on warnings alone but 1 under --strict", async () => {
+    const warningOnly: CliIo["lint"] = async () => [
+      diagnostic({ severity: "warning", message: "iffy" }),
+    ];
+
+    const relaxed = await invoke(["d"], warningOnly);
+    expect(relaxed.code).toBe(0);
+
+    const strict = await invoke(["--strict", "d"], warningOnly);
+    expect(strict.code).toBe(1);
+  });
+
   it("promotes warnings to errors under --strict in github format", async () => {
     const { out } = await invoke(["--strict", "--format", "github", "d"], async () => [
       diagnostic({ severity: "warning", message: "iffy" }),

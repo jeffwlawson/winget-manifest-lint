@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { realpathSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { compareDiagnostics, type Diagnostic } from "./diagnostic.js";
@@ -27,8 +28,8 @@ Options:
   --strict                Promote warnings to errors.
 
 Exit codes:
-  0  no diagnostics
-  1  diagnostics found
+  0  no errors (warnings alone, without --strict, still exit 0)
+  1  errors found (warnings too, under --strict)
   2  bad usage or unreadable input
 `;
 
@@ -45,8 +46,10 @@ export interface CliIo {
 
 /**
  * Parse argv, lint each directory, render, and return the process exit code:
- * `0` clean, `1` diagnostics found, `2` bad usage or unreadable input. It never
- * calls `process.exit` — the caller owns that — so it stays pure enough to test.
+ * `0` no errors, `1` errors found, `2` bad usage or unreadable input. The exit
+ * is computed from the *rendered* diagnostics, counting only errors, so warnings
+ * alone exit `0` while `--strict` (which promotes them) makes them exit `1`. It
+ * never calls `process.exit` — the caller owns that — so it stays testable.
  */
 export async function run(argv: string[], io: CliIo): Promise<number> {
   let values: { format: string; strict: boolean };
@@ -89,7 +92,7 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
   const output = formatters[values.format](rendered);
   io.stdout(output.endsWith("\n") || output === "" ? output : `${output}\n`);
 
-  return diagnostics.length === 0 ? 0 : 1;
+  return rendered.some((diagnostic) => diagnostic.severity === "error") ? 1 : 0;
 }
 
 /** Under `--strict`, every warning is treated as an error. */
@@ -110,8 +113,10 @@ function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-// Only run as a CLI, not when imported by a test.
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+// Only run as a CLI, not when imported by a test. Compare realpaths so the
+// guard holds when launched through the npm-created `bin` symlink, where
+// `process.argv[1]` is the symlink but `import.meta.url` is the realpath.
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   run(process.argv.slice(2), {
     stdout: (text) => process.stdout.write(text),
     stderr: (text) => process.stderr.write(text),

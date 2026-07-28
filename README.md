@@ -27,8 +27,8 @@ Accepts one or more manifest version directories.
 
 | Code | Meaning |
 |---|---|
-| `0` | No diagnostics. |
-| `1` | Diagnostics found. |
+| `0` | No errors. Warnings alone (without `--strict`) still exit `0`. |
+| `1` | Errors found. With `--strict`, warnings are promoted and count here too. |
 | `2` | Bad usage, or an input directory could not be read. |
 
 ## Status
