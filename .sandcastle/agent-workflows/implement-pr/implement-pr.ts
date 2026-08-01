@@ -38,7 +38,7 @@ try {
 
   const result = await runWithExtraction({
     name: `implement-pr-${PR_NUMBER}`,
-    agent: claudeAgent(),
+    agent: claudeAgent("implement-pr"),
     sandbox: noSandbox(),
     logging: { type: "stdout" },
     promptFile: path.join(import.meta.dirname, "prompt.md"),

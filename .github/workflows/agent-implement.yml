@@ -101,6 +101,7 @@ jobs:
           # Unset variable interpolates to "", and the runner falls back to its
           # own default. Change the model in Settings -> Variables, no commit.
           AGENT_MODEL: ${{ vars.AGENT_MODEL }}
+          AGENT_MODEL_IMPLEMENT: ${{ vars.AGENT_MODEL_IMPLEMENT }}
           BRANCH: ${{ steps.branch.outputs.name }}
           OUTPUT_DIR: ${{ runner.temp }}
         run: npx tsx .sandcastle/agent-workflows/implement/implement.ts

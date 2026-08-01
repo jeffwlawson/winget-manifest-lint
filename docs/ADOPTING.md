@@ -70,15 +70,22 @@ structural.
 
 ## 2b. Choosing the model
 
-Set a **repository variable** (Settings → Secrets and variables → Actions → Variables):
+Defaults live in `shared/common.ts`, and **most specific wins**:
 
-| Variable | Effect |
+| Source | Scope |
 |---|---|
-| `AGENT_MODEL` | model id every agent runs on. Unset → the runner's own default |
+| `AGENT_MODEL_<WORKFLOW>` variable | that workflow only — `AGENT_MODEL_REVIEW`, `AGENT_MODEL_UPDATE_BRANCH`, `AGENT_MODEL_IMPLEMENT`, `AGENT_MODEL_IMPLEMENT_PR` |
+| `AGENT_MODEL` variable | every workflow, **including** ones with their own default — "run everything on X" is the point of setting it |
+| per-workflow default in code | `update-branch` → `claude-sonnet-5` |
+| global default in code | everything else → `claude-opus-5` |
 
-The default lives in one place, `shared/common.ts`, so the workflows pass the variable through
-blindly and never repeat the string. Swapping models is a variable change in the UI — no commit, no
-PR, applies to all four workflows at once, and reverting means clearing the variable.
+`update-branch` is the one mechanical job: the workflow merges in bash and only wakes the agent when
+git reports a conflict, so the task is reconciling two known texts rather than designing anything.
+Everything else — writing code from a spec, reviewing it, acting on review feedback — gets the
+strongest model, because those are the steps where a plausible-but-wrong answer costs the most.
+
+Set them as **repository variables** (Settings → Secrets and variables → Actions → Variables). No
+commit, no PR, and reverting means clearing the variable.
 
 A **variable**, not a secret, deliberately: secrets are masked in logs, so "which model produced
 this?" would become unanswerable. Each run echoes `Agent model: <id> (default | AGENT_MODEL
@@ -92,9 +99,9 @@ Pin an explicit id rather than tracking a floating alias, for the reason `.nvmrc
 runner, CI and a local run must not drift onto different versions. Bumping is then a decision with a
 timestamp, which also lets you attribute a change in output quality to it.
 
-If you later want different models per workflow — a cheap one for mechanical merge-conflict
-resolution, the strongest for review — the seam is already there: read `AGENT_MODEL_<WORKFLOW>`
-first and fall back to `AGENT_MODEL`. One line, when you actually need it.
+The precedence chain is covered by tests in `tests/common.test.ts`, including the empty-string case
+above. A wrong order does not error — it quietly runs every agent on the wrong model, and the only
+trace is a log line nobody reads until output quality is questioned weeks later.
 
 ---
 

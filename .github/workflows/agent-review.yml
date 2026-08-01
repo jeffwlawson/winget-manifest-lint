@@ -140,6 +140,7 @@ jobs:
           # Unset variable interpolates to "", and the runner falls back to its
           # own default. Change the model in Settings -> Variables, no commit.
           AGENT_MODEL: ${{ vars.AGENT_MODEL }}
+          AGENT_MODEL_REVIEW: ${{ vars.AGENT_MODEL_REVIEW }}
           OUTPUT_DIR: ${{ runner.temp }}
           CI_STATUS_FILE: ${{ runner.temp }}/ci_status.md
         run: npx tsx .sandcastle/agent-workflows/review/review.ts

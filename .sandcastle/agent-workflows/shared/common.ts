@@ -39,29 +39,76 @@ export const safeSh = (cmd: string): string => {
 };
 
 /**
- * The model every agent runs on, unless `AGENT_MODEL` overrides it. Pinned
- * deliberately rather than floating: the same reasoning as `.nvmrc` — the
- * runner, CI and a local run must not silently drift onto different versions.
- * Bumping it is a decision, so it gets a commit or a variable change.
+ * The model agents run on unless something overrides it. Pinned deliberately
+ * rather than floating: the same reasoning as `.nvmrc` — the runner, CI and a
+ * local run must not silently drift onto different versions. Bumping it is a
+ * decision, so it gets a commit or a variable change.
  */
-const DEFAULT_MODEL = "claude-opus-4-8";
+const DEFAULT_MODEL = "claude-opus-5";
 
 /**
- * Resolve the model for this run.
+ * Per-workflow defaults, listed only where they differ from `DEFAULT_MODEL`.
  *
- * `||` rather than `??` on purpose: GitHub interpolates an **unset** `vars.X`
- * into the empty string, not into nothing, so the env var arrives as `""` on
- * every repo that has not set the variable. `??` would pass that straight
- * through and hand the CLI an empty model id.
+ * `update-branch` is the one mechanical job in the set: the workflow merges in
+ * bash and only wakes the agent when git reports a conflict, so the task is
+ * "reconcile two known texts" rather than "design something". Sonnet is sized
+ * for that.
+ *
+ * Caveat worth keeping visible — the one real conflict this has resolved was
+ * *not* purely mechanical (see friction.md, 2026-07-25): a naive "preserve both
+ * sides" merge would have re-listed shipped features as future work, and the
+ * agent avoided that by noticing what had actually shipped. If a future
+ * conflict is resolved badly, this row is the first thing to suspect; raise it
+ * by setting AGENT_MODEL_UPDATE_BRANCH rather than editing code.
  */
-const agentModel = (): string => process.env["AGENT_MODEL"] || DEFAULT_MODEL;
+const WORKFLOW_MODELS: Record<string, string> = {
+  "update-branch": "claude-sonnet-5",
+};
 
-export const claudeAgent = () => {
-  const model = agentModel();
+/** Workflow name → the env var that overrides it. `implement-pr` → `AGENT_MODEL_IMPLEMENT_PR`. */
+const overrideVar = (workflow: string): string =>
+  `AGENT_MODEL_${workflow.toUpperCase().replace(/-/g, "_")}`;
+
+/**
+ * Resolve the model, most specific wins:
+ *
+ *   AGENT_MODEL_<WORKFLOW>  → this workflow only
+ *   AGENT_MODEL             → every workflow, including ones with a per-workflow
+ *                             default; "run everything on X" is the whole point
+ *                             of setting it, so it deliberately outranks the
+ *                             table above
+ *   WORKFLOW_MODELS         → the baked per-workflow default
+ *   DEFAULT_MODEL           → everything else
+ *
+ * `||` rather than `??` throughout: GitHub interpolates an **unset** `vars.X`
+ * into the empty string, not into nothing, so on any repo that has not set the
+ * variable the env var arrives as `""`. `??` would pass that straight through
+ * and hand the CLI an empty model id.
+ */
+export const agentModel = (workflow: string): string =>
+  process.env[overrideVar(workflow)] ||
+  process.env["AGENT_MODEL"] ||
+  WORKFLOW_MODELS[workflow] ||
+  DEFAULT_MODEL;
+
+const modelSource = (workflow: string): string => {
+  if (process.env[overrideVar(workflow)]) return overrideVar(workflow);
+  if (process.env["AGENT_MODEL"]) return "AGENT_MODEL";
+  if (WORKFLOW_MODELS[workflow]) return `${workflow} default`;
+  return "default";
+};
+
+/**
+ * @param workflow Directory name under `agent-workflows/` — `implement`,
+ *   `implement-pr`, `review`, `update-branch`. Drives model selection, so it
+ *   must match the directory or the workflow silently gets the global default.
+ */
+export const claudeAgent = (workflow: string) => {
+  const model = agentModel(workflow);
   // Echoed so a run is self-documenting — "which model produced this?" is the
   // first question asked of any output that looks off, and the answer should
   // not require knowing what a repository variable was set to that week.
-  console.log(`Agent model: ${model}${model === DEFAULT_MODEL ? " (default)" : " (AGENT_MODEL override)"}`);
+  console.log(`Agent model: ${model} (${modelSource(workflow)})`);
   return sandcastle.claudeCode(model, {
     env: {
       CLAUDE_CODE_OAUTH_TOKEN: required("CLAUDE_CODE_OAUTH_TOKEN"),
