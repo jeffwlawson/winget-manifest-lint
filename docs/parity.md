@@ -25,7 +25,7 @@ row marked ❌.
 | `agent-review` — review a PR | ✅ | 🟡 | review-only; see §3 |
 | `agent-implement-pr` — act on PR feedback | ✅ | 🟡 | ours is `agent:fix`; see §4 |
 | `agent-update-branch` — refresh a stale PR branch | ✅ | ✅ | ours merges mechanically and only calls the agent on conflicts |
-| `agent-explore` — read-only triage pass on an issue | — | ❌ | **upstream only**, not in CVM. Superseded locally — see below |
+| `agent-explore` — read-only triage pass on an issue | — | ❌ | **upstream only**, not in CVM. Superseded by local planning skills *in this repo's usage* — see below, and the scope note |
 | `agent-to-issues-prd` — PRD issue → sub-issues | ✅ | ❌ | PRD tier. Superseded locally by `wayfinder` |
 | `agent-implement-prd` — work sub-issues in sequence | ✅ | ❌ | PRD tier; run-chaining. Nothing to sequence — the backlog is flat and independent |
 | `agent-promote-queued` — auto-promote when blockers close | ✅ | ❌ | needs dependency chains we don't have |
@@ -41,19 +41,26 @@ and no `explore`. They are two answers to the same question — *how does a well
 to exist?* Upstream assesses a spec that already exists and that you may not have written; CVM
 generates the spec itself, top-down.
 
-**Both are superseded here by local skills, and that is a firmer reason than "not yet needed".**
-Issues in this repo are authored by the owner and planned with `wayfinder` (charts a large effort
-into decision tickets on the tracker — the same job as `to-issues-prd`, better specified) and
-`grilling` / `grill-with-docs` (relentless interview on one plan, and it looks facts up in the
-environment rather than asking).
+**Both are superseded by local skills — as standing practice, not as a current accident.** Issues
+here are authored by the owner and planned with `wayfinder` (charts a large effort into decision
+tickets on the tracker — the same job as `to-issues-prd`, better specified) and `grilling` /
+`grill-with-docs` (relentless interview on one plan, and it looks facts up in the environment
+rather than asking). That is the intended way in to every applicable issue going forward, which is
+what makes these ❌ rather than 📋: the need does not return as the backlog grows.
 
-The residual neither local skill covers: **a small issue written quickly and confidently.** Every
-one of the pilot's six spec errors came from exactly that, and it is beneath the threshold at which
-anyone invokes a planning skill. `agent-explore` only half-addresses it — its prompt verifies an
-issue's claims *against the code*, and three of the six were wrong about **winget**, not about this
-repo. So the gap is real but a fifth workflow is not the fix; `explore` is advisory too, and nothing
-would force reading it before labelling `agent:implement`. Grounding claims in primary sources at
-authoring time is what actually closed it before (#36/#37).
+**Scope of that decision.** It is about *how issues reach this repo*, not about the workflow set
+being complete. If these workflows are ever packaged for another repo (see `docs/ADOPTING.md`), the
+calculus is per-adopter: a repo that takes community issues has no owner-authored guarantee and no
+local planning skill in the loop, and `agent-explore` is the upstream answer to exactly that. Do not
+read these rows as "the template does not need explore."
+
+The residual, and the qualifier that matters: `wayfinder` applies to a large effort, so **a small
+issue written quickly and confidently** falls beneath the threshold at which anyone invokes it. All
+six of the pilot's spec errors came from exactly there. `agent-explore` only half-addresses it — its
+prompt verifies an issue's claims *against the code*, and three of the six were wrong about
+**winget**, not about this repo. So the gap is real but a fifth workflow is not the fix; `explore`
+is advisory too, and nothing would force reading it before labelling `agent:implement`. Grounding
+claims in primary sources at authoring time is what actually closed it before (#36/#37).
 
 > **Keeping this file honest.** It drifted once already — §4 still marked thread replies ❌ after
 > #50 shipped them, while §9 listed the same feature as done. A parity doc that contradicts itself
