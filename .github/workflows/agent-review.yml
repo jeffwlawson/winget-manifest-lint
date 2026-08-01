@@ -141,6 +141,27 @@ jobs:
           PAYLOAD: ${{ runner.temp }}/review_payload.json
         run: gh api --method POST "repos/{owner}/{repo}/pulls/${PR_NUMBER}/reviews" --input "$PAYLOAD"
 
+      # Draft means "the automated pipeline has not finished", not "the agent is
+      # still writing code" — so this belongs here rather than at the end of
+      # implement. The human's first real decision (act on the review, or merge)
+      # only exists once the review is posted; marking ready any earlier fires
+      # the signal during a window when there is nothing to decide.
+      #
+      # `success()` on purpose: a failed review should leave the PR in draft, so
+      # the draft state agrees with the `agent:blocked` label rather than
+      # presenting an unreviewed PR as finished.
+      #
+      # Does not cascade: `ready_for_review` is not in the default
+      # `pull_request` types (opened/synchronize/reopened), so neither ci.yml nor
+      # corpus.yml re-runs. GITHUB_TOKEN suffices — `pull-requests: write` is
+      # already granted above, and using AGENT_PAT here would be actively wrong.
+      #
+      # `|| true` because a re-review of an already-ready PR (the normal case
+      # after `agent:fix`) must not fail a job that has posted a good review.
+      - name: Mark PR ready for review
+        if: success()
+        run: gh pr ready "$PR_NUMBER" || true
+
       - name: Mark blocked on failure
         if: failure()
         env:
