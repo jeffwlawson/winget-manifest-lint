@@ -13,11 +13,6 @@ on:
     # Weekly, Monday. Offset from corpus.yml's 06:17 so the two do not queue up.
     - cron: "23 7 * * 1"
   workflow_dispatch:
-  # TEMPORARY — remove before merge. Lets the logic be exercised on the branch
-  # rather than merged untested; workflow_dispatch only works from the default
-  # branch, so there is no other way to run this before it lands.
-  push:
-    branches: [chore/agent-pat-expiry-check]
 
 jobs:
   check:
