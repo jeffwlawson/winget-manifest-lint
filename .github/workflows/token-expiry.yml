@@ -41,11 +41,37 @@ jobs:
             exit 0
           fi
 
+          # One request, two things captured: the response headers (for the
+          # expiry date) and the HTTP status. The status is what tells a real
+          # answer apart from a 401 (revoked/invalid token) or a network blip —
+          # all of which would otherwise return no header and masquerade as
+          # "no expiry", greening the run on the exact failure we exist to catch.
+          # --max-time stops a hung connection from doing the same.
+          headers_file="${RUNNER_TEMP}/pat-headers.txt"
+          http_code=$(curl -sS -o /dev/null -D "$headers_file" -w '%{http_code}' \
+            --max-time 20 \
+            -H "Authorization: token $PAT" \
+            https://api.github.com/user) || http_code="000"
+
+          if [ "$http_code" != "200" ]; then
+            # A revoked/invalid token (401/403) is actionable — file the issue.
+            # Anything else (000 network error, 5xx) is likely transient, so we
+            # redden the run without raising an issue. Neither is "no expiry".
+            echo "http_code=$http_code" >> "$GITHUB_OUTPUT"
+            if [ "$http_code" = "401" ] || [ "$http_code" = "403" ]; then
+              echo "::warning::GitHub rejected AGENT_PAT (HTTP $http_code) — it looks revoked or already expired."
+              echo "state=invalid" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::Could not reach GitHub to check AGENT_PAT (HTTP $http_code)."
+              echo "state=unreachable" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+
           # GitHub returns this header for any PAT that carries an expiry date.
           # Fine-grained tokens always do; a classic token set to "no expiration"
           # omits it.
-          expiry=$(curl -sI -H "Authorization: token $PAT" https://api.github.com/user \
-            | tr -d '\r' \
+          expiry=$(tr -d '\r' < "$headers_file" \
             | awk -F': ' 'tolower($1)=="github-authentication-token-expiration"{print $2}')
 
           if [ -z "$expiry" ]; then
@@ -78,16 +104,19 @@ jobs:
       # One open issue at a time, reused rather than duplicated — a new issue
       # every Monday would train you to ignore it.
       - name: Raise or update the reminder issue
-        if: steps.check.outputs.state == 'expiring' || steps.check.outputs.state == 'expired'
+        if: steps.check.outputs.state == 'expiring' || steps.check.outputs.state == 'expired' || steps.check.outputs.state == 'invalid'
         env:
           STATE: ${{ steps.check.outputs.state }}
           DAYS: ${{ steps.check.outputs.days }}
           EXPIRY: ${{ steps.check.outputs.expiry }}
+          HTTP_CODE: ${{ steps.check.outputs.http_code }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
           if [ "$STATE" = "expired" ]; then
             headline="**\`AGENT_PAT\` has expired** (expiry: $EXPIRY)."
+          elif [ "$STATE" = "invalid" ]; then
+            headline="**\`AGENT_PAT\` was rejected by GitHub** (HTTP $HTTP_CODE) — it has most likely been revoked or already expired."
           else
             headline="**\`AGENT_PAT\` expires in $DAYS days** (expiry: $EXPIRY)."
           fi
@@ -123,8 +152,15 @@ jobs:
 
       # Fail the run as well as filing the issue. The issue is the signal a human
       # acts on; a red run is what makes it visible from the Actions tab alone.
-      - name: Fail when expiring
-        if: steps.check.outputs.state == 'expiring' || steps.check.outputs.state == 'expired'
+      - name: Fail when the token needs attention
+        if: steps.check.outputs.state == 'expiring' || steps.check.outputs.state == 'expired' || steps.check.outputs.state == 'invalid' || steps.check.outputs.state == 'unreachable'
         run: |
-          echo "::error::AGENT_PAT ${{ steps.check.outputs.state }} — expires ${{ steps.check.outputs.expiry }} (${{ steps.check.outputs.days }} days)."
+          case "${{ steps.check.outputs.state }}" in
+            expiring|expired)
+              echo "::error::AGENT_PAT ${{ steps.check.outputs.state }} — expires ${{ steps.check.outputs.expiry }} (${{ steps.check.outputs.days }} days)." ;;
+            invalid)
+              echo "::error::AGENT_PAT was rejected by GitHub (HTTP ${{ steps.check.outputs.http_code }}) — revoked or already expired." ;;
+            *)
+              echo "::error::Could not reach GitHub to check AGENT_PAT (HTTP ${{ steps.check.outputs.http_code }})." ;;
+          esac
           exit 1
