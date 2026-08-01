@@ -68,6 +68,36 @@ structural.
 
 ---
 
+## 2b. Choosing the model
+
+Set a **repository variable** (Settings → Secrets and variables → Actions → Variables):
+
+| Variable | Effect |
+|---|---|
+| `AGENT_MODEL` | model id every agent runs on. Unset → the runner's own default |
+
+The default lives in one place, `shared/common.ts`, so the workflows pass the variable through
+blindly and never repeat the string. Swapping models is a variable change in the UI — no commit, no
+PR, applies to all four workflows at once, and reverting means clearing the variable.
+
+A **variable**, not a secret, deliberately: secrets are masked in logs, so "which model produced
+this?" would become unanswerable. Each run echoes `Agent model: <id> (default | AGENT_MODEL
+override)` for the same reason.
+
+> **The one trap.** An unset `vars.X` interpolates to the **empty string**, not to nothing. Resolve
+> it with `||`, never `??` — nullish coalescing passes `""` straight through and hands the CLI an
+> empty model id. Same shape as the `secrets.AGENT_PAT || secrets.GITHUB_TOKEN` fallbacks.
+
+Pin an explicit id rather than tracking a floating alias, for the reason `.nvmrc` exists: the
+runner, CI and a local run must not drift onto different versions. Bumping is then a decision with a
+timestamp, which also lets you attribute a change in output quality to it.
+
+If you later want different models per workflow — a cheap one for mechanical merge-conflict
+resolution, the strongest for review — the seam is already there: read `AGENT_MODEL_<WORKFLOW>`
+first and fall back to `AGENT_MODEL`. One line, when you actually need it.
+
+---
+
 ## 3. Labels
 
 All six must exist. A missing label makes its transition a no-op, and the state machine drifts

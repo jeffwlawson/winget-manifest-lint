@@ -98,6 +98,9 @@ jobs:
         if: steps.preflight.outputs.refused == 'false'
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Unset variable interpolates to "", and the runner falls back to its
+          # own default. Change the model in Settings -> Variables, no commit.
+          AGENT_MODEL: ${{ vars.AGENT_MODEL }}
           BRANCH: ${{ steps.branch.outputs.name }}
           OUTPUT_DIR: ${{ runner.temp }}
         run: npx tsx .sandcastle/agent-workflows/implement/implement.ts

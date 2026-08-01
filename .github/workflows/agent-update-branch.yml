@@ -119,6 +119,9 @@ jobs:
         if: steps.merge.outputs.status == 'conflicts'
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Unset variable interpolates to "", and the runner falls back to its
+          # own default. Change the model in Settings -> Variables, no commit.
+          AGENT_MODEL: ${{ vars.AGENT_MODEL }}
           OUTPUT_DIR: ${{ runner.temp }}
           CONFLICTS: ${{ steps.merge.outputs.conflicts }}
         run: npx tsx .sandcastle/agent-workflows/update-branch/update-branch.ts

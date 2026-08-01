@@ -38,12 +38,36 @@ export const safeSh = (cmd: string): string => {
   }
 };
 
-export const claudeAgent = () =>
-  sandcastle.claudeCode("claude-opus-4-8", {
+/**
+ * The model every agent runs on, unless `AGENT_MODEL` overrides it. Pinned
+ * deliberately rather than floating: the same reasoning as `.nvmrc` — the
+ * runner, CI and a local run must not silently drift onto different versions.
+ * Bumping it is a decision, so it gets a commit or a variable change.
+ */
+const DEFAULT_MODEL = "claude-opus-4-8";
+
+/**
+ * Resolve the model for this run.
+ *
+ * `||` rather than `??` on purpose: GitHub interpolates an **unset** `vars.X`
+ * into the empty string, not into nothing, so the env var arrives as `""` on
+ * every repo that has not set the variable. `??` would pass that straight
+ * through and hand the CLI an empty model id.
+ */
+const agentModel = (): string => process.env["AGENT_MODEL"] || DEFAULT_MODEL;
+
+export const claudeAgent = () => {
+  const model = agentModel();
+  // Echoed so a run is self-documenting — "which model produced this?" is the
+  // first question asked of any output that looks off, and the answer should
+  // not require knowing what a repository variable was set to that week.
+  console.log(`Agent model: ${model}${model === DEFAULT_MODEL ? " (default)" : " (AGENT_MODEL override)"}`);
+  return sandcastle.claudeCode(model, {
     env: {
       CLAUDE_CODE_OAUTH_TOKEN: required("CLAUDE_CODE_OAUTH_TOKEN"),
     },
   });
+};
 
 /** Run `gh` with argv (no shell), so arguments with spaces/quotes are safe. */
 export const gh = (args: string[]): string =>
