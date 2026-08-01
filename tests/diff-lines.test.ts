@@ -11,13 +11,10 @@ import { parseDiffLines } from "../.sandcastle/agent-workflows/shared/diff-lines
  *
  * Every diff below is real `git diff` output (generated, then pasted), including
  * its trailing newline — that is what `sh("git diff …")` hands the parser in
- * production. One consequence worth naming up front: because the diff ends in a
- * newline, `diff.split("\n")` yields a trailing empty string, and the parser's
- * blank-context branch (`line === ""`) counts it, adding one line past the last
- * hunk to the diff's final file. The tests below assert the properties each case
- * targets with membership checks rather than exact set equality, so this
- * incidental trailing line does not obscure the behaviour under test — except in
- * the deleted-file case, where it is exactly what makes the documented bug fire.
+ * production. The parser strips that trailing newline before splitting, so the
+ * trailing empty string it would otherwise yield is not counted: no phantom line
+ * is emitted past the end of the diff's final file. The tests below can and do
+ * assert exact set equality on the line sets they target.
  */
 
 const linesOf = (diff: string, file: string): Set<number> => {
@@ -25,6 +22,9 @@ const linesOf = (diff: string, file: string): Set<number> => {
   if (!set) throw new Error(`parseDiffLines produced no entry for ${file}`);
   return set;
 };
+
+const exactly = (diff: string, file: string): number[] =>
+  [...linesOf(diff, file)].sort((a, b) => a - b);
 
 describe("parseDiffLines — added and context lines", () => {
   // Additions live deep in the file, so the hunk header is `+8`, not `+1`. The
@@ -59,6 +59,12 @@ index 0ff3bbb..c6ca7ae 100644
     expect(lines.has(9)).toBe(true);
     expect(lines.has(10)).toBe(true);
   });
+
+  it("emits exactly the hunk's new-file lines and nothing past the end", () => {
+    // Context 8–10, NEWA=11, NEWB=12, context 11–13 → new lines 13–15. No
+    // trailing phantom line 16 from the diff's final newline.
+    expect(exactly(midFile, "big.txt")).toEqual([8, 9, 10, 11, 12, 13, 14, 15]);
+  });
 });
 
 describe("parseDiffLines — removed lines", () => {
@@ -82,6 +88,27 @@ index 07795f6..1450354 100644
     expect(lines.has(2)).toBe(true);
     // k2 is line 3, NOT 4: still no shift from the removal.
     expect(lines.has(3)).toBe(true);
+    // Exactly 1–3: no phantom line 4 past the end of the file.
+    expect(exactly(removal, "rem.txt")).toEqual([1, 2, 3]);
+  });
+});
+
+describe("parseDiffLines — trailing addition at end of file", () => {
+  // The last line of the last file is an added line — exactly the anchor a
+  // reviewer commenting on a trailing addition produces. one=1, two=2,
+  // three=3; the diff's trailing newline must not append a phantom line 4.
+  const trailingAdd = `diff --git a/tail.txt b/tail.txt
+index 814f4a4..4cb29ea 100644
+--- a/tail.txt
++++ b/tail.txt
+@@ -1,2 +1,3 @@
+ one
+ two
++three
+`;
+
+  it("emits no phantom line past the final added line", () => {
+    expect(exactly(trailingAdd, "tail.txt")).toEqual([1, 2, 3]);
   });
 });
 
@@ -120,6 +147,9 @@ index 1b2a1c5..f52caf0 100644
     // Second hunk picks up from its header start of 8; CHANGED lands at 11.
     expect(lines.has(8)).toBe(true);
     expect(lines.has(11)).toBe(true);
+    // Exactly the two hunks' new-file lines: 1–6 then 8–12, with 7 (between the
+    // hunks) and any trailing phantom line 13 both absent.
+    expect(exactly(twoHunks, "m.txt")).toEqual([1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12]);
   });
 });
 
@@ -155,10 +185,15 @@ index 07795f6..1450354 100644
     expect(add.has(4)).toBe(true); // NEW1
     expect(add.has(5)).toBe(true); // NEW2
     expect(add.has(7)).toBe(true); // context `e`
+    // add.txt is not the diff's final file, so it never carried the phantom
+    // line — its set is exactly 1–7.
+    expect(exactly(twoFiles, "add.txt")).toEqual([1, 2, 3, 4, 5, 6, 7]);
 
     const rem = linesOf(twoFiles, "rem.txt");
-    // rem.txt only ever spans lines 1–3; add.txt's higher lines are not here.
+    // rem.txt only ever spans lines 1–3; add.txt's higher lines are not here,
+    // and the trailing newline no longer appends a phantom line 4.
     expect(rem.has(7)).toBe(false);
+    expect(exactly(twoFiles, "rem.txt")).toEqual([1, 2, 3]);
   });
 });
 
@@ -221,20 +256,15 @@ index b77b4eb..0000000
     expect(parseDiffLines(withDeletion).has("zzz.txt")).toBe(false);
   });
 
-  // DOCUMENTED BUG — behaviour is asserted as-is, NOT fixed here (issue #63 is
-  // test-only; `.sandcastle/` code runs from this branch during review, so it
-  // must not change). The invariant "no line is attributed to a file that does
-  // not own it" is VIOLATED: because `+++ /dev/null` leaves `currentFile` on
-  // keep.txt, the deleted file's hunk header (`@@ -1,2 +0,0 @@`) resets the
-  // counter to 0, and the diff's trailing empty line is then counted against
-  // keep.txt — attributing phantom line 0 to a file whose real range is 1–3.
-  // Fixing it (e.g. clearing `currentFile` on `+++ /dev/null`) is a separate
-  // issue with its own review.
-  it("leaks a phantom line 0 into the previously-named file (documents a bug)", () => {
+  // The invariant "no line is attributed to a file that does not own it" holds.
+  // `+++ /dev/null` leaves `currentFile` on keep.txt and the deletion's hunk
+  // header (`@@ -1,2 +0,0 @@`) resets the counter to 0, but the deletion's body
+  // is only removed lines (which never advance the counter) and the diff's
+  // trailing newline is stripped before splitting — so no phantom line 0 leaks
+  // into keep.txt. Its set is exactly its own real range, 1–3.
+  it("attributes no phantom line to the file preceding a deletion", () => {
     const keep = linesOf(withDeletion, "keep.txt");
-    expect(keep.has(1)).toBe(true); // the file's real, owned lines
-    expect(keep.has(2)).toBe(true);
-    expect(keep.has(3)).toBe(true);
-    expect(keep.has(0)).toBe(true); // <-- phantom, sourced from the deletion
+    expect(keep.has(0)).toBe(false); // no phantom sourced from the deletion
+    expect(exactly(withDeletion, "keep.txt")).toEqual([1, 2, 3]);
   });
 });
