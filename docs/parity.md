@@ -23,7 +23,7 @@ row marked ❌.
 |---|:--:|:--:|---|
 | `agent-implement` — issue → branch → PR | ✅ | ✅ | |
 | `agent-review` — review a PR | ✅ | 🟡 | review-only; see §3 |
-| `agent-implement-pr` — act on PR feedback | ✅ | 🟡 | ours is `agent:fix`; see §4 |
+| `agent-implement-pr` — act on PR feedback | ✅ | 🟡 | ours is `agent-fix`, label `agent:fix`; see §4 |
 | `agent-update-branch` — refresh a stale PR branch | ✅ | ✅ | ours merges mechanically and only calls the agent on conflicts |
 | `agent-explore` — read-only triage pass on an issue | — | ❌ | **upstream only**, not in CVM. Superseded by local planning skills *in this repo's usage* — see below, and the scope note |
 | `agent-to-issues-prd` — PRD issue → sub-issues | ✅ | ❌ | PRD tier. Superseded locally by `wayfinder` |
@@ -107,7 +107,7 @@ claims in primary sources at authoring time is what actually closed it before (#
 
 ---
 
-## 4. `agent-implement-pr` (ours: `agent:fix`)
+## 4. `agent-implement-pr` (ours: `agent-fix`, label `agent:fix`)
 
 | Feature | CVM | Ours | Note |
 |---|:--:|:--:|---|
@@ -124,6 +124,14 @@ claims in primary sources at authoring time is what actually closed it before (#
 | **Resolves the threads it addressed** | ❌ | ➕ | declines stay **open** so a human can push back |
 | **Posts new inline comments** | ✅ | ❌ | it answers existing threads; it does not open new ones |
 | **Posts top-level comments** | ✅ | ❌ | |
+
+**On the name.** CVM calls this `agent-implement-pr` and triggers it with `agent:implement`,
+disambiguated only by event type. Ours is `agent-fix.yml`, triggered by `agent:fix`. Two reasons:
+labelling a *PR* `agent:implement` here would silently do nothing, since `agent-implement.yml`
+listens on `issues:` only; and every other workflow in this repo holds **file name == display name
+== trigger label**, so `agent-implement-pr` + `agent:fix` was the one pair you had to remember. The
+`-pr` suffix is redundant besides — it triggers on `pull_request_target` and refuses on a closed or
+merged PR, so it cannot run on anything else.
 
 Ours converses in-thread and closes what it settled; CVM replies but never resolves, so its
 threads accumulate until a human clears them. What ours still cannot do is *raise* something new —

@@ -105,7 +105,7 @@ describe("agentModel — precedence", () => {
   const VARS = [
     "AGENT_MODEL",
     "AGENT_MODEL_IMPLEMENT",
-    "AGENT_MODEL_IMPLEMENT_PR",
+    "AGENT_MODEL_FIX",
     "AGENT_MODEL_REVIEW",
     "AGENT_MODEL_UPDATE_BRANCH",
   ] as const;
@@ -153,11 +153,17 @@ describe("agentModel — precedence", () => {
     expect(agentModel("implement")).toBe("claude-sonnet-5");
   });
 
-  // implement-pr -> AGENT_MODEL_IMPLEMENT_PR. A hyphen that survived into the
+  // update-branch -> AGENT_MODEL_UPDATE_BRANCH. A hyphen surviving into the
   // var name would make the override silently unreachable.
   it("maps a hyphenated workflow name onto an underscored var", () => {
-    process.env["AGENT_MODEL_IMPLEMENT_PR"] = "claude-sonnet-5";
-    expect(agentModel("implement-pr")).toBe("claude-sonnet-5");
+    process.env["AGENT_MODEL_UPDATE_BRANCH"] = "claude-opus-5";
+    expect(agentModel("update-branch")).toBe("claude-opus-5");
+    expect(agentModel("implement")).toBe("claude-opus-5");
+  });
+
+  it("resolves the fix workflow, whose name has no hyphen", () => {
+    process.env["AGENT_MODEL_FIX"] = "claude-sonnet-5";
+    expect(agentModel("fix")).toBe("claude-sonnet-5");
     expect(agentModel("implement")).toBe("claude-opus-5");
   });
 });

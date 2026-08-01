@@ -1,4 +1,4 @@
-name: Agent Implement (PR)
+name: Agent Fix
 
 # Address review feedback on an existing PR: the agent reads collaborator (and
 # our own review agent's) comments, fixes the branch, and pushes.
@@ -16,7 +16,7 @@ on:
     types: [labeled]
 
 jobs:
-  implement-pr:
+  fix:
     # Job-level, so a fork PR skips before a runner is provisioned — no
     # checkout, no npm ci, no secrets. Fails closed: a deleted fork gives
     # head.repo == null, which also skips.
@@ -106,9 +106,9 @@ jobs:
           # Unset variable interpolates to "", and the runner falls back to its
           # own default. Change the model in Settings -> Variables, no commit.
           AGENT_MODEL: ${{ vars.AGENT_MODEL }}
-          AGENT_MODEL_IMPLEMENT_PR: ${{ vars.AGENT_MODEL_IMPLEMENT_PR }}
+          AGENT_MODEL_FIX: ${{ vars.AGENT_MODEL_FIX }}
           OUTPUT_DIR: ${{ runner.temp }}
-        run: npx tsx .sandcastle/agent-workflows/implement-pr/implement-pr.ts
+        run: npx tsx .sandcastle/agent-workflows/fix/fix.ts
 
       # --force-with-lease pinned to the SHA we checked out: if anything else
       # advanced the branch during the run, refuse rather than clobber it.

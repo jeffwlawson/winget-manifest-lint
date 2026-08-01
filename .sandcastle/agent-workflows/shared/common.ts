@@ -65,7 +65,7 @@ const WORKFLOW_MODELS: Record<string, string> = {
   "update-branch": "claude-sonnet-5",
 };
 
-/** Workflow name → the env var that overrides it. `implement-pr` → `AGENT_MODEL_IMPLEMENT_PR`. */
+/** Workflow name → the env var that overrides it. `update-branch` → `AGENT_MODEL_UPDATE_BRANCH`. */
 const overrideVar = (workflow: string): string =>
   `AGENT_MODEL_${workflow.toUpperCase().replace(/-/g, "_")}`;
 
@@ -100,7 +100,7 @@ const modelSource = (workflow: string): string => {
 
 /**
  * @param workflow Directory name under `agent-workflows/` — `implement`,
- *   `implement-pr`, `review`, `update-branch`. Drives model selection, so it
+ *   `fix`, `review`, `update-branch`. Drives model selection, so it
  *   must match the directory or the workflow silently gets the global default.
  */
 export const claudeAgent = (workflow: string) => {

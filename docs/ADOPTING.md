@@ -74,7 +74,7 @@ Defaults live in `shared/common.ts`, and **most specific wins**:
 
 | Source | Scope |
 |---|---|
-| `AGENT_MODEL_<WORKFLOW>` variable | that workflow only — `AGENT_MODEL_REVIEW`, `AGENT_MODEL_UPDATE_BRANCH`, `AGENT_MODEL_IMPLEMENT`, `AGENT_MODEL_IMPLEMENT_PR` |
+| `AGENT_MODEL_<WORKFLOW>` variable | that workflow only — `AGENT_MODEL_REVIEW`, `AGENT_MODEL_UPDATE_BRANCH`, `AGENT_MODEL_IMPLEMENT`, `AGENT_MODEL_FIX` |
 | `AGENT_MODEL` variable | every workflow, **including** ones with their own default — "run everything on X" is the point of setting it |
 | per-workflow default in code | `update-branch` → `claude-sonnet-5` |
 | global default in code | everything else → `claude-opus-5` |
@@ -88,8 +88,8 @@ Set them as **repository variables** (Settings → Secrets and variables → Act
 commit, no PR, and reverting means clearing the variable.
 
 A **variable**, not a secret, deliberately: secrets are masked in logs, so "which model produced
-this?" would become unanswerable. Each run echoes `Agent model: <id> (default | AGENT_MODEL
-override)` for the same reason.
+this?" would become unanswerable. Each run echoes `Agent model: <id> (<source>)` — where source is the
+variable that won, or `default` — for the same reason.
 
 > **The one trap.** An unset `vars.X` interpolates to the **empty string**, not to nothing. Resolve
 > it with `||`, never `??` — nullish coalescing passes `""` straight through and hands the CLI an
@@ -129,7 +129,7 @@ step; `agent:blocked` is applied on failure alongside a comment carrying the rea
 
 ```
 .github/workflows/agent-implement.yml
-.github/workflows/agent-implement-pr.yml
+.github/workflows/agent-fix.yml
 .github/workflows/agent-review.yml
 .github/workflows/agent-update-branch.yml
 .sandcastle/agent-workflows/            # runners, prompts, shared helpers
@@ -159,7 +159,7 @@ The workflows are not yet parameterised. These are the couplings to edit by hand
 | Assumption | Where | Notes |
 |---|---|---|
 | Default branch is `main` | ~11 sites across all four workflows, plus `shared/pr-feedback.ts` | if yours is `master`/`develop`, every diff and base is wrong |
-| `npm ci`, `npm run verify`, `.nvmrc` | four workflows, and `implement` / `implement-pr` / `update-branch` prompts | the whole toolchain assumption; a non-Node repo replaces all of it |
+| `npm ci`, `npm run verify`, `.nvmrc` | four workflows, and `implement` / `fix` / `update-branch` prompts | the whole toolchain assumption; a non-Node repo replaces all of it |
 | `CONTEXT.md` and `CLAUDE.md` exist | every prompt reads them first | see §6 |
 | Project domain | `implement/prompt.md` has an "IF THIS ISSUE ADDS A RULE" section; `review/prompt.md` describes the corpus; `review/extraction.md` cites real source paths | roughly half of each prompt is this repo's domain |
 
@@ -217,7 +217,7 @@ ones citing the upstream schema or source directly.
 
 ## 8. If your repo is public
 
-`agent-review` and `agent-implement-pr` use `pull_request_target`, which runs with secrets and write
+`agent-review` and `agent-fix` use `pull_request_target`, which runs with secrets and write
 access. Copy these controls with the workflows — they are not decoration.
 
 | Control | Why |
