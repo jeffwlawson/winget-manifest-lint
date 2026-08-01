@@ -79,6 +79,13 @@ interface GqlThread {
  *
  * Defaults to `main` when the base ref is absent or empty, so nothing regresses
  * on a path that has not plumbed the base through.
+ *
+ * `baseRef` is interpolated into a shell command (`sh` runs `/bin/sh`), so it
+ * must stay trusted input. Today it is: the base branch comes from
+ * `github.event.pull_request.base.ref`, and both creating that branch and
+ * labelling the PR `agent:review` require repo write access — the loop's trust
+ * boundary. A git ref may legally contain shell metacharacters, so do not
+ * repoint this at untrusted data without quoting/validating first.
  */
 export const diffCommandAgainstBase = (baseRef: string | undefined): string => {
   const base = (baseRef ?? "").trim() || "main";
