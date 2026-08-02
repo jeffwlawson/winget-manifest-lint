@@ -85,18 +85,33 @@ const overrideVar = (workflow: string): string =>
  * variable the env var arrives as `""`. `??` would pass that straight through
  * and hand the CLI an empty model id.
  */
-export const agentModel = (workflow: string): string =>
-  process.env[overrideVar(workflow)] ||
-  process.env["AGENT_MODEL"] ||
-  WORKFLOW_MODELS[workflow] ||
-  DEFAULT_MODEL;
+interface ResolvedModel {
+  readonly model: string;
+  /** Which rung of the chain won, for the log line. */
+  readonly source: string;
+}
 
-const modelSource = (workflow: string): string => {
-  if (process.env[overrideVar(workflow)]) return overrideVar(workflow);
-  if (process.env["AGENT_MODEL"]) return "AGENT_MODEL";
-  if (WORKFLOW_MODELS[workflow]) return `${workflow} default`;
-  return "default";
+/**
+ * The ordering lives here **once**. It previously existed twice — once to pick
+ * the model and once to name the winner for the log — which meant reordering
+ * one and not the other would have the log confidently report the wrong source.
+ * A log that lies about provenance is worse than no log, and nothing would have
+ * caught it: the naming half was unexported and untestable.
+ */
+const resolveModel = (workflow: string): ResolvedModel => {
+  const perWorkflowOverride = process.env[overrideVar(workflow)];
+  if (perWorkflowOverride) return { model: perWorkflowOverride, source: overrideVar(workflow) };
+
+  const globalOverride = process.env["AGENT_MODEL"];
+  if (globalOverride) return { model: globalOverride, source: "AGENT_MODEL" };
+
+  const perWorkflowDefault = WORKFLOW_MODELS[workflow];
+  if (perWorkflowDefault) return { model: perWorkflowDefault, source: `${workflow} default` };
+
+  return { model: DEFAULT_MODEL, source: "default" };
 };
+
+export const agentModel = (workflow: string): string => resolveModel(workflow).model;
 
 /**
  * @param workflow Directory name under `agent-workflows/` — `implement`,
@@ -104,11 +119,11 @@ const modelSource = (workflow: string): string => {
  *   must match the directory or the workflow silently gets the global default.
  */
 export const claudeAgent = (workflow: string) => {
-  const model = agentModel(workflow);
+  const { model, source } = resolveModel(workflow);
   // Echoed so a run is self-documenting — "which model produced this?" is the
   // first question asked of any output that looks off, and the answer should
   // not require knowing what a repository variable was set to that week.
-  console.log(`Agent model: ${model} (${modelSource(workflow)})`);
+  console.log(`Agent model: ${model} (${source})`);
   return sandcastle.claudeCode(model, {
     env: {
       CLAUDE_CODE_OAUTH_TOKEN: required("CLAUDE_CODE_OAUTH_TOKEN"),

@@ -199,7 +199,7 @@ write access + trust collaborators"; ours adds structural gates because this rep
 | `agent:blocked` | ✅ | ✅ |
 | `agent:queued` | ✅ | ❌ needs `promote-queued` |
 | `agent:to-issues` | ✅ | ❌ PRD tier |
-| `agent:update-branch` | ✅ | 📋 with that workflow |
+| `agent:update-branch` | ✅ | ✅ |
 | `Sandcastle` (triage: "ready for an AFK agent") | ✅ | ❌ no triage step yet |
 
 **Why `agent:fix` rather than overloading `agent:implement`:** CVM disambiguates by event type,

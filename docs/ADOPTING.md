@@ -89,7 +89,7 @@ commit, no PR, and reverting means clearing the variable.
 
 A **variable**, not a secret, deliberately: secrets are masked in logs, so "which model produced
 this?" would become unanswerable. Each run echoes `Agent model: <id> (<source>)` — where source is the
-variable that won, or `default` — for the same reason.
+variable that won, `<workflow> default`, or `default` — for the same reason.
 
 > **The one trap.** An unset `vars.X` interpolates to the **empty string**, not to nothing. Resolve
 > it with `||`, never `??` — nullish coalescing passes `""` straight through and hands the CLI an
