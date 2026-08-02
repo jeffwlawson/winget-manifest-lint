@@ -30,6 +30,10 @@ jobs:
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       BRANCH: ${{ github.event.pull_request.head.ref }}
+      # The PR's real base branch. review-context.ts diffs HEAD against this so
+      # the inline-comment allow-list matches GitHub's PR diff exactly; a
+      # hardcoded `main` mis-filters any PR stacked on another branch (#71).
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
 
@@ -46,11 +50,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      - name: Make main available for diffing
-        # Create a local `main` ref (the checkout is of head.sha, so main is not
-        # present). review-context.ts diffs against it; a bare `git fetch origin
-        # main` would populate FETCH_HEAD but no `main` ref, so keep the refspec.
-        run: git fetch origin +refs/heads/main:refs/heads/main
+      - name: Make the PR base available for diffing
+        # Create a local ref for the PR's base branch (the checkout is of
+        # head.sha, so the base is not present). review-context.ts diffs against
+        # it; a bare `git fetch origin <ref>` would populate FETCH_HEAD but no
+        # named ref, so keep the refspec. Falls back to `main` when base.ref is
+        # somehow empty, matching diffCommandAgainstBase's own default.
+        run: git fetch origin "+refs/heads/${BASE_REF:-main}:refs/heads/${BASE_REF:-main}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
