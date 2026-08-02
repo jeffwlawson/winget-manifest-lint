@@ -36,6 +36,10 @@ jobs:
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       BRANCH: ${{ github.event.pull_request.head.ref }}
+      # The PR's real base branch — pr-feedback.ts diffs HEAD against this for
+      # the DIFF context. A hardcoded `main` describes work the PR does not own
+      # on any PR stacked on another branch (#71).
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
       BRANCH_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       PR_STATE: ${{ github.event.pull_request.state }}
       PR_MERGED: ${{ github.event.pull_request.merged }}
@@ -69,11 +73,11 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
 
-      - name: Prepare branch and make main available for diffing
+      - name: Prepare branch and make the PR base available for diffing
         if: steps.state.outputs.proceed == 'true'
         run: |
           set -euo pipefail
-          git fetch origin +refs/heads/main:refs/heads/main
+          git fetch origin "+refs/heads/${BASE_REF:-main}:refs/heads/${BASE_REF:-main}"
           git checkout -B "$BRANCH"
           git config user.name "sandcastle-agent[bot]"
           git config user.email "sandcastle-agent[bot]@users.noreply.github.com"
