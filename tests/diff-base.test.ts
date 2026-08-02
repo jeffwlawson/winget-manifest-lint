@@ -11,8 +11,9 @@ import { diffCommandAgainstBase } from "../.sandcastle/agent-workflows/shared/pr
  * assert the exact argv.
  *
  * Argv, not a command string: the base ref reaches `git` as one argument via
- * `execFileSync` and is never shell-parsed (issue #75). The last case below is
- * the one that would have failed under string interpolation.
+ * `execFileSync` and is never shell-parsed (issue #75). The last case pins that
+ * a metacharacter ref passes through verbatim — no escaping, no splitting; the
+ * "no shell" half of that guarantee lives in `git()` in common.ts.
  */
 describe("diffCommandAgainstBase", () => {
   it("diffs against the given base, three-dot, HEAD on the right", () => {

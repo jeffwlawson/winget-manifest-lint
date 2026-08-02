@@ -145,6 +145,15 @@ export const gh = (args: string[]): string =>
  *
  * Literal `sh("git ...")` calls elsewhere are fine and deliberately left alone:
  * the rule is *variables go through argv*, not *never use `sh`* (issue #75).
+ *
+ * Known gap, recorded rather than implied-clean: `fetchTrustedIssue` and
+ * `fetchTrustedComments` below still interpolate variables into
+ * ``safeSh(`gh api ...`)``. They are safe today only because of what those
+ * variables happen to be — `GH_REPO` is `github.repository`, and the issue
+ * number is a `\d+` capture in review-context.ts — not because of an argv
+ * boundary. Closing that needs a `safeGh(args)` wrapper, not a call-site swap:
+ * `safeSh` swallows non-zero exits and `gh()` throws, and both callers rely on
+ * the swallowing via `|| "{}"` / `|| "[]"`. Tracked as issue #80.
  */
 export const git = (args: readonly string[]): string =>
   execFileSync("git", [...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
