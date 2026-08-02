@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { isTrustedAuthor } from "../.sandcastle/agent-workflows/shared/common.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { agentModel, isTrustedAuthor } from "../.sandcastle/agent-workflows/shared/common.js";
 
 /**
  * `isTrustedAuthor` is the security boundary of the agent loop: every
@@ -92,5 +92,78 @@ describe("isTrustedAuthor — the two conditions are an OR, not an AND", () => {
 
   it("trusts a trusted bot login even with an untrusted association", () => {
     expect(isTrustedAuthor("NONE", "github-actions")).toBe(true);
+  });
+});
+
+/**
+ * Model selection. The precedence chain is the kind of thing that breaks
+ * silently — a wrong order does not error, it just quietly runs every agent on
+ * the wrong model, and the only trace is a log line nobody reads until output
+ * quality is questioned weeks later.
+ */
+describe("agentModel — precedence", () => {
+  const VARS = [
+    "AGENT_MODEL",
+    "AGENT_MODEL_IMPLEMENT",
+    "AGENT_MODEL_FIX",
+    "AGENT_MODEL_REVIEW",
+    "AGENT_MODEL_UPDATE_BRANCH",
+  ] as const;
+
+  beforeEach(() => {
+    for (const v of VARS) delete process.env[v];
+  });
+  afterEach(() => {
+    for (const v of VARS) delete process.env[v];
+  });
+
+  it("falls back to the global default when nothing is set", () => {
+    expect(agentModel("implement")).toBe("claude-opus-5");
+    expect(agentModel("review")).toBe("claude-opus-5");
+  });
+
+  it("uses the baked per-workflow default for update-branch", () => {
+    expect(agentModel("update-branch")).toBe("claude-sonnet-5");
+  });
+
+  // The failure this guards: GitHub interpolates an UNSET repository variable
+  // into the empty string, not into nothing, so on any repo that has not set
+  // these the env vars arrive as "". Resolving with `??` instead of `||` would
+  // pass that through and hand the CLI an empty model id.
+  it("treats an empty string as unset, on both the global and the per-workflow var", () => {
+    process.env["AGENT_MODEL"] = "";
+    process.env["AGENT_MODEL_REVIEW"] = "";
+    expect(agentModel("review")).toBe("claude-opus-5");
+
+    process.env["AGENT_MODEL_UPDATE_BRANCH"] = "";
+    expect(agentModel("update-branch")).toBe("claude-sonnet-5");
+  });
+
+  it("lets the global override beat a baked per-workflow default", () => {
+    // "run everything on X" is the whole point of setting AGENT_MODEL, so it
+    // must outrank the table — including update-branch's cheaper default.
+    process.env["AGENT_MODEL"] = "claude-opus-5";
+    expect(agentModel("update-branch")).toBe("claude-opus-5");
+  });
+
+  it("lets a per-workflow override beat the global override", () => {
+    process.env["AGENT_MODEL"] = "claude-sonnet-5";
+    process.env["AGENT_MODEL_REVIEW"] = "claude-opus-5";
+    expect(agentModel("review")).toBe("claude-opus-5");
+    expect(agentModel("implement")).toBe("claude-sonnet-5");
+  });
+
+  // update-branch -> AGENT_MODEL_UPDATE_BRANCH. A hyphen surviving into the
+  // var name would make the override silently unreachable.
+  it("maps a hyphenated workflow name onto an underscored var", () => {
+    process.env["AGENT_MODEL_UPDATE_BRANCH"] = "claude-opus-5";
+    expect(agentModel("update-branch")).toBe("claude-opus-5");
+    expect(agentModel("implement")).toBe("claude-opus-5");
+  });
+
+  it("resolves the fix workflow, whose name has no hyphen", () => {
+    process.env["AGENT_MODEL_FIX"] = "claude-sonnet-5";
+    expect(agentModel("fix")).toBe("claude-sonnet-5");
+    expect(agentModel("implement")).toBe("claude-opus-5");
   });
 });

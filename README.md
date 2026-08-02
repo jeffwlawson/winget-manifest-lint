@@ -38,6 +38,10 @@ Early. See [CONTEXT.md](./CONTEXT.md) for the domain model,
 [docs/parity.md](./docs/parity.md) for how this repo's agent loop compares to the one it was
 modelled on.
 
+The linter is a testbed. The thing actually being built is the **agent loop around it** — four
+workflows that turn a labelled issue into a reviewed pull request unattended. To install that
+somewhere else, see [docs/ADOPTING.md](./docs/ADOPTING.md).
+
 ## Non-goals
 
 - **Not a generator.** [Komac](https://github.com/russellbanks/Komac) already does that.
