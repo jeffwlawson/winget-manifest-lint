@@ -56,6 +56,21 @@ jobs:
         # it; a bare `git fetch origin <ref>` would populate FETCH_HEAD but no
         # named ref, so keep the refspec. Falls back to `main` when base.ref is
         # somehow empty, matching diffCommandAgainstBase's own default.
+        #
+        # A ref name may legally contain `$()`, backticks, `;`, `|` and `&`, so
+        # #75 asked whether this line is shell-safe. It is, and the two reasons
+        # are both load-bearing — keep them if you edit this:
+        #   1. BASE_REF arrives as an `env:` var, NOT as a `${{ }}` interpolated
+        #      into the run script. Interpolation would splice the ref into the
+        #      script *source*, where it would be parsed as syntax; an env var
+        #      is only ever data.
+        #   2. `"${BASE_REF:-main}"` expands in one pass. POSIX shells do not
+        #      re-scan an expansion result for command substitution or operators
+        #      — only word splitting and globbing, which the double quotes
+        #      suppress. Verified 2026-08-02 against sh and bash with the values
+        #      above: each reached git verbatim as a single argument.
+        # So the quotes are not decorative; dropping them, or switching to
+        # `${{ github.event.pull_request.base.ref }}` inline, breaks this.
         run: git fetch origin "+refs/heads/${BASE_REF:-main}:refs/heads/${BASE_REF:-main}"
 
       - name: Setup Node.js
