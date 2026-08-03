@@ -168,9 +168,29 @@ jobs:
       #
       # `|| true` because a re-review of an already-ready PR (the normal case
       # after `agent:fix`) must not fail a job that has posted a good review.
+      # MUST use AGENT_PAT. `GITHUB_TOKEN` cannot convert a draft PR even with
+      # `pull-requests: write` — it fails with
+      #   GraphQL: Resource not accessible by integration (markPullRequestReadyForReview)
+      # because the Actions bot is an App installation and this mutation is not
+      # in its permission set at all. A user PAT is not an App, so it can.
+      #
+      # This is the fourth GITHUB_TOKEN limitation the loop has hit, and the
+      # third of that four where the operation *looks* covered by the granted
+      # permission. See docs/ADOPTING.md §1.
+      #
+      # Never `|| true` here. It was, and it turned a hard failure into a green
+      # step: every reviewed PR silently stayed a draft while the workflow
+      # reported success, and two were marked ready by hand without anyone
+      # noticing the feature was broken. A warning keeps the run green — a PR
+      # stuck in draft is not worth failing a review over — while making the
+      # failure visible, which `|| true` did not.
       - name: Mark PR ready for review
         if: success()
-        run: gh pr ready "$PR_NUMBER" || true
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr ready "$PR_NUMBER" \
+            || echo "::warning::Could not mark PR #${PR_NUMBER} ready for review. If AGENT_PAT is unset this is expected — GITHUB_TOKEN cannot do it. Mark it ready by hand."
 
       - name: Mark blocked on failure
         if: failure()
