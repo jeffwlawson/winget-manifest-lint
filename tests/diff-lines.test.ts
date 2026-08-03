@@ -10,7 +10,7 @@ import { parseDiffLines } from "../.sandcastle/agent-workflows/shared/diff-lines
  * it from the new-file start.
  *
  * Every diff below is real `git diff` output (generated, then pasted), including
- * its trailing newline — that is what `sh("git diff …")` hands the parser in
+ * its trailing newline — that is what `git(["diff", …])` hands the parser in
  * production. The parser strips that trailing newline before splitting, so the
  * trailing empty string it would otherwise yield is not counted: no phantom line
  * is emitted past the end of the diff's final file. The tests below can and do
