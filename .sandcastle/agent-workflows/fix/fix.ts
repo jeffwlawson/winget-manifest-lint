@@ -10,7 +10,7 @@ import {
   sh,
   writeJson,
 } from "../shared/common.js";
-import { filterOutcomes, fixOutputSchema } from "../shared/fix-output.js";
+import { filterOutcomes, filterTopLevelComments, fixOutputSchema } from "../shared/fix-output.js";
 import { fetchPullRequestFeedback } from "../shared/pr-feedback.js";
 import { runWithExtraction } from "../shared/run-with-extraction.js";
 
@@ -57,9 +57,13 @@ try {
   const outcomes = filterOutcomes(result.output.threadOutcomes, feedback.threadIds);
   writeJson("thread_outcomes.json", outcomes);
 
-  // Findings that belong to no thread. Written unconditionally — an empty file
-  // is the normal case, and the workflow posts nothing for it.
-  const topLevelComments = result.output.topLevelComments;
+  // Findings that belong to no thread, capped and deduped against what earlier
+  // runs already posted. Written unconditionally — an empty file is the normal
+  // case, and the workflow posts nothing for it.
+  const topLevelComments = filterTopLevelComments(
+    result.output.topLevelComments,
+    feedback.priorTopLevelComments,
+  );
   writeJson("top_level_comments.json", topLevelComments);
 
   const after = sh("git rev-parse HEAD").trim();
@@ -75,10 +79,13 @@ try {
       `${outcomes.filter((o) => o.status === "declined").length} declined ` +
       `(${result.output.threadOutcomes.length} produced, ${outcomes.length} kept).`,
   );
+  const produced = result.output.topLevelComments.length;
   console.log(
-    topLevelComments.length === 0
-      ? "Top-level comments: none — nothing outside the threads."
-      : `Top-level comments: ${topLevelComments.length}.`,
+    topLevelComments.length > 0
+      ? `Top-level comments: ${topLevelComments.length} to post (${produced} produced).`
+      : produced === 0
+        ? "Top-level comments: none — nothing outside the threads."
+        : `Top-level comments: none posted (${produced} produced, all dropped — see warnings above).`,
   );
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));

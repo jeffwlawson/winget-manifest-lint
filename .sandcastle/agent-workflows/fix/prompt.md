@@ -102,6 +102,9 @@ covers.
 **Silence is the default.** Most runs have nothing that belongs outside a thread; report an empty
 list and nothing is posted. A channel that fires every time is one nobody reads.
 
+At most **two** are posted per run and the rest are dropped, so if you have more than two, report
+the two that matter. This is a ceiling, not a target — one, or none, is the usual answer.
+
 Use prose and name the place — "`shared/pr-feedback.ts:206` still interpolates `GH_REPO` into a
 shell string" is as locatable as an inline comment and does not need the diff-line machinery.
 

@@ -177,9 +177,13 @@ jobs:
       #
       # Silence is the normal outcome. Most runs answer their threads and have
       # nothing else to say, and a bot that comments on every run is the noise
-      # that teaches a reader to skim. `pull-requests: write` is already granted
-      # and nothing new is needed; `issues: write` is deliberately NOT — an
-      # agent that raises work does not file it (docs/parity.md §10).
+      # that teaches a reader to skim. The runner caps and dedupes the list, so
+      # that is bounded mechanically rather than by the prompt alone
+      # (`filterTopLevelComments`), and every body it writes carries
+      # `<!-- agent-fix:top-level -->` so the next run does not read this run's
+      # own note back as feedback to act on. `pull-requests: write` is already
+      # granted and nothing new is needed; `issues: write` is deliberately NOT —
+      # an agent that raises work does not file it (docs/parity.md §10).
       - name: Post top-level comments
         if: steps.state.outputs.proceed == 'true' && success()
         continue-on-error: true

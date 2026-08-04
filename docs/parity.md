@@ -283,6 +283,26 @@ expensive to rediscover.
   Collapsing the two closes a cycle with no gate, the same failure "never auto-cascade review →
   fix" above already guards against. Concretely: `agent-fix.yml` gets no `issues: write`, and
   harvesting those comments into issues (#79) is a separate workflow behind its own label.
+- **No agent reads its own output back as input.** The invariant above closes by a different door
+  if it does. `gh pr comment` posts as `github-actions[bot]`, which `isTrustedAuthor` trusts on
+  purpose — so without a filter the agent's own "worth a follow-up issue" note returns next run as
+  `# CONVERSATION`, under a prompt heading that says to address or decline it. The agent raises the
+  follow-up and the agent, one label later, does it, with no human in between; the quieter variant
+  is worse, where it simply addresses the note and expands scope in exactly the way the note existed
+  to avoid. So every top-level comment carries `<!-- agent-fix:top-level -->` and
+  `pr-feedback.ts` drops marked comments from the `conversation` surface. Narrowing that surface
+  costs nothing: the review → fix handoff runs through `reviews`/`reviewThreads`, not `comments`.
+  It also keeps `hasFeedback` honest — a PR with every thread resolved and no human input still
+  refuses, rather than finding "feedback" the agent wrote itself.
+- **A channel the prompt bounds is also bounded mechanically.** Prompt guidance sets intent; it is
+  not a control. `filterOutcomes` drops invented thread ids because a model invents them, and
+  `filterTopLevelComments` caps a run at two comments and drops verbatim repeats of ones already
+  posted, because "silence is the default" is otherwise aspirational — three `agent:fix` rounds
+  would leave three copies of the same note, and three issues once #79 harvests them.
+- **An optional channel never has veto power over the mandatory one.** A malformed top-level
+  comment is dropped with a warning, not thrown on: throwing would burn both extraction retries and
+  take every thread reply and resolve down with it. A malformed *thread outcome* still throws — that
+  is the payload the run exists to produce.
 - **Draft means the pipeline has not finished, not that the agent is still typing.** Review marks
   the PR ready, and only on `success()`. So a PR left in draft after a run is a PR whose automated
   pipeline did not complete — a second signal that agrees with `agent:blocked` instead of

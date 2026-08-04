@@ -22,7 +22,8 @@ answering no specific comment. Not a summary of what you changed — the commit 
 Not anything a thread reply already says.
 
 **Default to an empty array.** Most runs have nothing that belongs outside a thread, and a channel
-that fires every time is one nobody reads.
+that fires every time is one nobody reads. At most two are posted; anything past the second is
+dropped, so list the two that matter rather than everything you could say.
 
 ```json
 <output>

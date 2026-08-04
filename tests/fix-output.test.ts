@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   filterOutcomes,
+  filterTopLevelComments,
   fixOutputSchema,
+  isAgentTopLevelComment,
+  TOP_LEVEL_COMMENT_MARKER,
+  unmarkedBody,
   type FixOutput,
   type ThreadOutcome,
 } from "../.sandcastle/agent-workflows/shared/fix-output.js";
@@ -82,16 +86,109 @@ describe("fixOutputSchema topLevelComments", () => {
     ]);
   });
 
-  it("rejects an empty body rather than posting a blank comment", () => {
-    expect(() => parse({ topLevelComments: [{ body: "   " }] })).toThrow(
-      /top-level comment body must be a non-empty string/,
-    );
-  });
-
   it("accepts a bare string, since the model emits both shapes", () => {
     expect(parse({ topLevelComments: ["out of scope: X"] }).topLevelComments[0]?.body).toBe(
       "out of scope: X",
     );
+  });
+
+  /**
+   * The rest of this block guards one thing: a malformed *optional* comment must
+   * never sink the mandatory payload. A throw here becomes a validation issue,
+   * burns both extraction retries, and takes every thread reply and resolve with
+   * it — giving the side channel veto power over what the run exists to produce.
+   */
+  it("drops an empty body instead of failing the extraction", () => {
+    const out = parse({
+      threadOutcomes: [{ threadId: "PRRT_a", status: "addressed", reply: "fixed" }],
+      topLevelComments: [{ body: "   " }],
+    });
+    expect(out.topLevelComments).toEqual([]);
+    expect(out.threadOutcomes).toHaveLength(1);
+  });
+
+  it("keeps the well-formed entries either side of a malformed one", () => {
+    const out = parse({ topLevelComments: ["first", { nope: 1 }, { body: "second" }] });
+    expect(out.topLevelComments.map((c) => c.body)).toEqual(["first", "second"]);
+  });
+
+  it("drops a non-array field rather than failing the extraction", () => {
+    const out = parse({
+      threadOutcomes: [{ threadId: "PRRT_a", status: "addressed", reply: "fixed" }],
+      topLevelComments: "a bare string where a list belongs",
+    });
+    expect(out.topLevelComments).toEqual([]);
+    expect(out.threadOutcomes).toHaveLength(1);
+  });
+
+  it("still fails on a malformed thread outcome — that one is the payload", () => {
+    expect(() => parse({ threadOutcomes: [{ threadId: "PRRT_a", status: "nope", reply: "x" }] })).toThrow();
+  });
+});
+
+/**
+ * The prompt says silence is the default; this is what makes that structural.
+ * Unbounded, a PR taking three `agent:fix` rounds accumulates three copies of
+ * the same out-of-scope note — and three issues once #79 harvests them.
+ */
+describe("filterTopLevelComments", () => {
+  const comment = (body: string) => ({ body });
+
+  it("stamps every kept comment with the marker", () => {
+    const kept = filterTopLevelComments([comment("out of scope: X")]);
+    expect(kept[0]?.body).toBe(`out of scope: X\n\n${TOP_LEVEL_COMMENT_MARKER}`);
+    expect(isAgentTopLevelComment(kept[0]?.body)).toBe(true);
+  });
+
+  it("caps a run at two, keeping the first two", () => {
+    const kept = filterTopLevelComments([comment("a"), comment("b"), comment("c")]);
+    expect(kept.map((c) => unmarkedBody(c.body))).toEqual(["a", "b"]);
+  });
+
+  it("drops a comment an earlier run already posted", () => {
+    const kept = filterTopLevelComments(
+      [comment("already said"), comment("new")],
+      [`already said\n\n${TOP_LEVEL_COMMENT_MARKER}`],
+    );
+    expect(kept.map((c) => unmarkedBody(c.body))).toEqual(["new"]);
+  });
+
+  it("collapses a comment repeated within one run", () => {
+    const kept = filterTopLevelComments([comment("same"), comment("same")]);
+    expect(kept).toHaveLength(1);
+  });
+
+  it("does not let a dropped duplicate free up a slot under the cap", () => {
+    const kept = filterTopLevelComments([comment("a"), comment("a"), comment("b"), comment("c")]);
+    expect(kept.map((c) => unmarkedBody(c.body))).toEqual(["a", "b"]);
+  });
+
+  it("posts nothing when there is nothing to post", () => {
+    expect(filterTopLevelComments([])).toEqual([]);
+  });
+});
+
+/**
+ * The marker is what stops the next `agent:fix` run reading this run's own
+ * out-of-scope note back as feedback to act on — `github-actions` is a trusted
+ * author on purpose, so nothing else on the `comments` surface distinguishes it.
+ */
+describe("top-level comment marker", () => {
+  it("recognises a body it stamped", () => {
+    expect(isAgentTopLevelComment(`note\n\n${TOP_LEVEL_COMMENT_MARKER}`)).toBe(true);
+  });
+
+  it("leaves a human comment alone", () => {
+    expect(isAgentTopLevelComment("please also rename this")).toBe(false);
+  });
+
+  it("treats an absent body as not ours rather than throwing", () => {
+    expect(isAgentTopLevelComment(null)).toBe(false);
+    expect(isAgentTopLevelComment(undefined)).toBe(false);
+  });
+
+  it("round-trips a stamped body back to what the agent wrote", () => {
+    expect(unmarkedBody(`note\n\n${TOP_LEVEL_COMMENT_MARKER}`)).toBe("note");
   });
 });
 
