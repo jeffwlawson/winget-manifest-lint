@@ -73,15 +73,21 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
 
+      # Shell-safe despite ref names being able to contain `$()`, backticks, `;`,
+      # `|` and `&` — see the long note on the same step in agent-review.yml.
+      # Short version: BASE_REF arrives as an `env:` var rather than a workflow
+      # expression spliced into this script, and a quoted parameter expansion is
+      # not re-scanned for syntax (verified 2026-08-02, #75).
+      #
+      # This note lives at step level, NOT inside the `run:` block. GitHub
+      # evaluates workflow expressions across the whole run script — shell
+      # comment lines included — so a literal empty expression written inside a
+      # run block is an "An expression was expected" startup failure. That is
+      # what took this workflow down for two days; see tests/workflows.test.ts.
       - name: Prepare branch and make the PR base available for diffing
         if: steps.state.outputs.proceed == 'true'
         run: |
           set -euo pipefail
-          # Shell-safe despite ref names being able to contain `$()`, backticks,
-          # `;`, `|` and `&` — see the long note on the same line in
-          # agent-review.yml. Short version: BASE_REF is an `env:` var rather
-          # than a `${{ }}` spliced into this script, and a quoted parameter
-          # expansion is not re-scanned for syntax (verified 2026-08-02, #75).
           git fetch origin "+refs/heads/${BASE_REF:-main}:refs/heads/${BASE_REF:-main}"
           git checkout -B "$BRANCH"
           git config user.name "sandcastle-agent[bot]"
