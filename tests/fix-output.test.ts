@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   filterOutcomes,
   fixOutputSchema,
+  type FixOutput,
   type ThreadOutcome,
 } from "../.sandcastle/agent-workflows/shared/fix-output.js";
 
@@ -11,12 +12,12 @@ import {
  * nobody addressed, which is silent and hard to notice.
  */
 
-const parse = (value: unknown) => {
+const parse = (value: unknown): FixOutput => {
   const result = fixOutputSchema["~standard"].validate(value);
   if ("issues" in result && result.issues) {
     throw new Error(result.issues.map((i) => i.message).join("; "));
   }
-  return (result as { value: { threadOutcomes: ThreadOutcome[] } }).value;
+  return (result as { value: FixOutput }).value;
 };
 
 const outcome = (over: Partial<ThreadOutcome> = {}): ThreadOutcome => ({
@@ -52,6 +53,45 @@ describe("fixOutputSchema", () => {
 
   it("defaults to an empty list rather than failing", () => {
     expect(parse({}).threadOutcomes).toEqual([]);
+  });
+});
+
+/**
+ * Top-level comments are the channel for a finding that belongs to no thread.
+ * The failure mode this guards is the opposite of the thread one: not a bad
+ * target, but a channel that fires on every run. A bot that comments "here is
+ * what I did" each time trains a reader to skim, so silence has to be what an
+ * absent — or explicitly empty — field means.
+ */
+describe("fixOutputSchema topLevelComments", () => {
+  it("posts nothing when the agent reports no comments", () => {
+    expect(parse({ threadOutcomes: [] }).topLevelComments).toEqual([]);
+  });
+
+  it("posts nothing when the field is absent entirely", () => {
+    expect(parse({}).topLevelComments).toEqual([]);
+  });
+
+  it("keeps the bodies it was given, in order", () => {
+    const out = parse({
+      topLevelComments: [{ body: "`pr-feedback.ts:206` still interpolates." }, { body: "second" }],
+    });
+    expect(out.topLevelComments.map((c) => c.body)).toEqual([
+      "`pr-feedback.ts:206` still interpolates.",
+      "second",
+    ]);
+  });
+
+  it("rejects an empty body rather than posting a blank comment", () => {
+    expect(() => parse({ topLevelComments: [{ body: "   " }] })).toThrow(
+      /top-level comment body must be a non-empty string/,
+    );
+  });
+
+  it("accepts a bare string, since the model emits both shapes", () => {
+    expect(parse({ topLevelComments: ["out of scope: X"] }).topLevelComments[0]?.body).toBe(
+      "out of scope: X",
+    );
   });
 });
 

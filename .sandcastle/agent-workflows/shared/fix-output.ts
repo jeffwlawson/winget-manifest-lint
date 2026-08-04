@@ -25,8 +25,28 @@ export interface ThreadOutcome {
   readonly reply: string;
 }
 
+/**
+ * A comment posted on the PR conversation rather than into a thread.
+ *
+ * The channel exists for a finding that belongs to **no** thread — something
+ * noticed while fixing that is out of scope, a refusal that spans threads
+ * rather than sitting in one, a cross-cutting observation answering no specific
+ * comment. Before it existed such a finding had nowhere to go: #63's documented
+ * bug ended up as a `DOCUMENTED BUG` comment inside a test file, and #77's
+ * "open a follow-up and reference it" option was simply not executable, so the
+ * agent would take the weaker option and reply as if it had chosen it.
+ *
+ * The agent never posts these itself — it reports them, the workflow posts
+ * them from validated output, and the token scrub stays exactly as it is.
+ */
+export interface TopLevelComment {
+  /** Markdown body, posted verbatim as a PR conversation comment. */
+  readonly body: string;
+}
+
 export interface FixOutput {
   readonly threadOutcomes: ThreadOutcome[];
+  readonly topLevelComments: TopLevelComment[];
 }
 
 const parseOutcome = (value: unknown): ThreadOutcome => {
@@ -42,10 +62,30 @@ const parseOutcome = (value: unknown): ThreadOutcome => {
   };
 };
 
+/**
+ * A list entry may arrive as `{ body }` or as a bare string — the same
+ * tolerance the outcome parser already extends to `thread_id`, for the same
+ * reason: the shape the model picks for a one-field object is not worth a
+ * failed extraction.
+ */
+const parseTopLevelComment = (value: unknown): TopLevelComment => {
+  if (typeof value === "string") {
+    return { body: asString(value, "top-level comment body") };
+  }
+  const record = asRecord(value, "top-level comment");
+  return { body: asString(record["body"] ?? record["comment"], "top-level comment body") };
+};
+
 export const fixOutputSchema = standardSchema<FixOutput>((value) => {
   const record = asRecord(value, "fix output");
   return {
     threadOutcomes: asArray(record["threadOutcomes"] ?? [], "threadOutcomes").map(parseOutcome),
+    // Absent means silence, not an error. Most runs have nothing that belongs
+    // outside a thread, and that is the case this channel must stay quiet for.
+    topLevelComments: asArray(
+      record["topLevelComments"] ?? record["top_level_comments"] ?? [],
+      "topLevelComments",
+    ).map(parseTopLevelComment),
   };
 });
 

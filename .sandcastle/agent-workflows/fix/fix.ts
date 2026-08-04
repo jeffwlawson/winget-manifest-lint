@@ -57,6 +57,11 @@ try {
   const outcomes = filterOutcomes(result.output.threadOutcomes, feedback.threadIds);
   writeJson("thread_outcomes.json", outcomes);
 
+  // Findings that belong to no thread. Written unconditionally — an empty file
+  // is the normal case, and the workflow posts nothing for it.
+  const topLevelComments = result.output.topLevelComments;
+  writeJson("top_level_comments.json", topLevelComments);
+
   const after = sh("git rev-parse HEAD").trim();
   if (before === after) {
     // Not a failure: the agent may have judged every comment already handled or
@@ -69,6 +74,11 @@ try {
     `Thread outcomes: ${outcomes.filter((o) => o.status === "addressed").length} addressed, ` +
       `${outcomes.filter((o) => o.status === "declined").length} declined ` +
       `(${result.output.threadOutcomes.length} produced, ${outcomes.length} kept).`,
+  );
+  console.log(
+    topLevelComments.length === 0
+      ? "Top-level comments: none — nothing outside the threads."
+      : `Top-level comments: ${topLevelComments.length}.`,
   );
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
