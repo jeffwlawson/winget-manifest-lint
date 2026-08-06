@@ -14,8 +14,7 @@ Omit threads you did not consider.
   can push back. Say plainly why, in the reply.
 
 Every reply is **under 100 words**, written to the person who left the comment: what you did, then
-why, then the commit if there is one. The examples below are the shape, not a length target — a
-terse example does not set a budget, only a stated number does.
+why, then the commit if there is one. The examples below are the shape, not a length target.
 
 Then report `topLevelComments` — comments posted on the PR conversation rather than into a thread.
 One is warranted only for something that belongs to **no** thread: an out-of-scope finding noticed

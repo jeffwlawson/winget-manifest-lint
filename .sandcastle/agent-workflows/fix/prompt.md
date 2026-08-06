@@ -74,9 +74,9 @@ If nothing genuinely needs changing, make no commit and say so.
 # REPLYING TO THREADS
 
 After the work, you will be asked to report one outcome per review thread you were shown —
-whether you **addressed** it or **declined** it, and a reply under 100 words explaining which. Those
-replies are posted publicly into the threads, and addressed threads are then resolved, so write
-them for the person who left the comment.
+whether you **addressed** it or **declined** it, and a reply under 100 words explaining which.
+Those replies are posted publicly into the threads, and addressed threads are then resolved, so
+write them for the person who left the comment.
 
 The test is **"is anything still outstanding?"**, not "did I personally change something?". A
 comment that an earlier commit already satisfied is **addressed** — say so and let it close. Use
