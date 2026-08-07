@@ -1245,6 +1245,18 @@ raise `AGENT_MODEL_UPDATE_BRANCH` (`common.ts:56-62` already nominates this row 
 to suspect); resolve one table cell by hand. Only after a real failure is there a ticket worth
 writing.
 
+**Outcome, same day:** #104 merged first and #103 was refreshed with `agent:update-branch`. Sonnet
+resolved it correctly — kept `main`'s re-derived row wholesale and folded this branch's
+hard-error correction into the same parenthetical. The part worth recording is what it noticed
+unprompted: line 175's "with the one exception called out above" was **not** in the conflict, but
+depends on the conflicted row to supply that exception. Taking the incoming row wholesale — the
+obvious move — would have left that sentence pointing at nothing, and neither `verify` nor a human
+skim would have caught it. It reasoned about a non-conflicted line's dependency on a conflicted
+one, which is more than the prompt asks for. Note this does **not** exercise the asymmetry above:
+the two sides were compatible corrections to one sentence, so "preserve both wherever possible"
+applied and the goal-alignment tiebreaker was never reached. The gap is still open; it just needs
+genuinely incompatible sides to appear.
+
 ### The fix agents were the best output of the round
 
 Six threads across the two PRs, all addressed, all resolved, no declines — and none of the six was
