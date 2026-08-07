@@ -63,14 +63,16 @@ the label deliberately.
 ### `agent:queued`
 
 `agent:queued` marks a fully-specified issue that **cannot start yet** because a blocker is still
-open — the state `/to-tickets` produces when it publishes a batch with blocking edges, where the
-first ticket is workable and the rest are not.
+open. `/to-tickets` produces that *situation* — it publishes a batch with blocking edges, where
+the first ticket is workable and the rest are not — but it does not apply this label, and neither
+does anything else. **A human writes `agent:queued`**, on the tickets that came out blocked.
 
 It is documented and created here so the vocabulary is settled before anything writes it, but
-**no workflow reads it today**. Promotion (`agent:queued` → `agent:implement` when the last
+**no workflow reads it today** either. Promotion (`agent:queued` → `agent:implement` when the last
 blocker closes) needs the `agent-promote-queued` workflow, which this repo does not have —
-`docs/parity.md` §8 tracks that gap, and its ❌ stands. Until then the label is a note to a human,
-with exactly the same weight as writing "blocked by #12" in the body.
+`docs/parity.md` §1 holds that row and its ❌ stands; §8 rates the label itself 🟡, declared and
+inert. Until then the label is a note to a human, with exactly the same weight as writing "blocked
+by #12" in the body.
 
 Do not add `agent:queued` and expect anything to happen. Adding `agent:implement` to a blocked
 issue, on the other hand, *does* happen — immediately, and against unmet dependencies.
