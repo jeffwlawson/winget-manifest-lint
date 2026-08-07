@@ -78,6 +78,7 @@ claims in primary sources at authoring time is what actually closed it before (#
 | Consumes the trigger label; `in-progress` / `blocked` transitions | ✅ | ✅ | |
 | Deterministic branch name `agent/issue-<n>-<slug>` | ✅ | ✅ | |
 | Refuses when a PR already targets the issue | ✅ | ✅ | |
+| Refuses a **closed** issue | ✅ | ✅ | added #102. Must precede the PR check, which lists *open* PRs only — so a merged-and-closed issue otherwise looks untouched |
 | Refuses a **sub-issue** / PRD-shaped issue | ✅ | ❌ | needs the PRD tier to be meaningful |
 | Issue body passed in by the runner (agent never calls `gh`) | ✅ | ✅ | |
 | **Agent-authored PR title + body** (`write-pr.ts`) | ✅ | ❌ | ours is a fixed heredoc in the workflow. Re-rated 2026-08-01: this is the only channel an agent has for reporting a **non-code** finding, and #63 hit that limit — see §9.2 |
@@ -92,6 +93,7 @@ claims in primary sources at authoring time is what actually closed it before (#
 | Feature | CVM | Ours | Note |
 |---|:--:|:--:|---|
 | Triggered by `agent:review` on a PR | ✅ | ✅ | |
+| Refuses when the PR is closed/merged | ✅ | ✅ | added #102. Without it, labelling a merged PR ran a full agent pass and then failed at `gh pr ready`, which cannot convert a merged PR — under a warning that blames a missing `AGENT_PAT` |
 | Structured output (schema-validated JSON from the agent) | ✅ | ✅ | |
 | Inline comments filtered to lines actually in the diff | ✅ | ✅ | GitHub rejects the whole review otherwise |
 | Posts a review summary | ✅ | ✅ | |
@@ -267,8 +269,54 @@ expensive to rediscover.
   adds no trigger label, so every round still needs a human `agent:fix`. Automating the return leg
   closes a true cycle with no gate.
 - **Review stays `contents: read`.** It is the one agent that cannot mutate the branch, and that
-  is what bounds the damage a wrong review can do. Adding self-improvement (§9.5) forfeits this
-  and also requires moving review into the `agent-mutate-pr-*` concurrency group.
+  is what bounds the damage a wrong review can do. Adding self-improvement (§9.5) forfeits this.
+
+  This used to read "…and also requires moving review into the `agent-mutate-pr-*` group", which
+  had the concurrency argument backwards and cost a live race to notice (#102). Review's exclusion
+  from that group was never a consequence of it being `contents: read`: the hazard is not review
+  *writing*, it is review *reading during another job's write*, and `contents: read` does nothing
+  about that. See the next invariant.
+- **One concurrency group per PR, one per issue.** Every workflow that touches PR *n* — review,
+  fix, update-branch — sits in `agent-pr-${{ github.event.pull_request.number }}` with
+  `cancel-in-progress: false`; `agent-implement` sits in a per-issue group. Not one group per
+  *mutation*: until #102, review had its own group on the theory that a `contents: read` job is
+  harmless to run alongside a push, and so `agent:fix` could push while `agent:review` was diffing
+  the same branch. The review that comes out of that describes a tree state that never existed —
+  plausible, confident, and about nothing. There is no case where concurrent review + mutate on
+  one PR is wanted, and the cost of serialising is a review that waits.
+
+  **What `cancel-in-progress: false` actually buys**, since it is not a queue and the difference
+  bites: GitHub holds **at most two runs per group — one running, one waiting** — and the waiting
+  slot has depth 1 and always holds the *newest* arrival. A third arrival cancels the current
+  waiter. So the flag protects the run already going, **not** the work behind it, and repeatedly
+  re-labelling cannot stack runs (found by re-labelling #100 three times). There is no
+  "reject the newcomer, keep what is running" mode — only cancel-active or cancel-waiter — and a
+  job-level `if:` cannot supply one, since it reads context data only and is evaluated after the
+  group frees.
+
+  **Residual, recorded against #92 (PRD tier).** Once `agent-implement-prd` lands it pushes to a
+  PR's branch under `agent-implement-prd-issue-<parent>` while review and fix use
+  `agent-pr-<prNumber>` — different groups, so the same read-during-write race exists one level up.
+  Group keys cannot close it: an `issues` event carries no PR number, so the two cannot compute a
+  shared key. The happy path does not overlap (the chain adds `agent:review` itself only after the
+  last sub-issue closes), but a human labelling `agent:review` mid-chain would hit it. If it ever
+  bites, the fix is a preflight refusal in review when the linked issue has an active PRD chain —
+  not a concurrency change.
+- **Every workflow refuses a terminal target before it does any work.** A closed or merged PR, a
+  closed issue: the guard is the first step, it is itself ungated, and it runs before checkout,
+  before `npm ci`, and before the label transitions — so a refused run never claims
+  `agent:in-progress` and never has a working tree to be wrong about. The failure it prevents is
+  not a crash but a *plausible* result: review had no guard until #102 and would review merged work
+  in full, then fail at `gh pr ready` under a warning blaming a missing `AGENT_PAT`, which is a
+  wrong diagnosis of a real problem. Each refusal says which state it refused; two refusals that
+  read alike are two states a human cannot tell apart from the comment. `tests/workflows.test.ts`
+  holds all four workflows to the shape.
+
+  One difference is not yet reconciled: review adds `agent:blocked` when it refuses (#102 asked for
+  it), while fix, update-branch and implement leave only a comment. That is a difference in what a
+  refused label leaves behind, not in what gets refused. Unify it in either direction when someone
+  next touches these — the argument for the label is that a comment scrolls away; against, that a
+  merged PR keeps a stale `agent:blocked` nobody will ever clear.
 - **Only `addressed` resolves a thread.** A `declined` thread keeps its reply and stays open, so a
   human can push back; auto-resolving a decline lets an agent bury a disagreement silently.
 - **Every world-writable input is author-gated.** Issue and PR text reaches agents only from
