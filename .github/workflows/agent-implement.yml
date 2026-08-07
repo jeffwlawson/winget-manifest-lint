@@ -28,33 +28,112 @@ jobs:
       GH_REPO: ${{ github.repository }}
 
     steps:
-      # Two refusals, in order. The state check has to come first: the PR query
-      # below lists open PRs only, so an issue whose PR has already merged looks
-      # exactly like an issue nobody has started. It then checks out `main`,
-      # finds the work already there, and usually dies at "no commits were
-      # made" — or, worse, invents a change and opens a duplicate PR (#102).
+      # Five refusals, in order, all of them here rather than in the agent: this
+      # step runs before checkout and `npm ci`, so a refusal costs one API call
+      # and nothing else.
       #
-      # Distinct messages on purpose: "someone is already on this" and "this is
-      # finished" call for different things from the human reading them.
+      # The state check has to come first: the PR query below lists open PRs
+      # only, so an issue whose PR has already merged looks exactly like an
+      # issue nobody has started. It then checks out `main`, finds the work
+      # already there, and usually dies at "no commits were made" — or, worse,
+      # invents a change and opens a duplicate PR (#102).
+      #
+      # Then shape (#90), before the PR query rather than after: an issue that
+      # must never be implemented should not be handed "close that PR, then
+      # re-add the label", a remedy that leads straight back to a refusal.
+      #
+      # Distinct messages throughout, on purpose. "Someone is already on this",
+      # "this is finished" and "this is not implementable as labelled" call for
+      # different things from the human reading them, and the comment is all
+      # they get without opening the run log.
       - name: Preflight
         id: preflight
         run: |
           set -euo pipefail
-          if [ "$ISSUE_STATE" != "open" ]; then
+
+          # The trigger label is consumed by every refusal, which is what makes
+          # a retry a deliberate human act rather than a re-run.
+          refuse() {
             echo "refused=true" >> "$GITHUB_OUTPUT"
             gh issue edit "$ISSUE_NUMBER" --remove-label "agent:implement" || true
-            gh issue comment "$ISSUE_NUMBER" --body "Refused to run: this issue is not open. Reopen it first, then re-add \`agent:implement\`."
+            gh issue comment "$ISSUE_NUMBER" --body "$1"
             exit 0
+          }
+
+          # A shape refusal also marks the issue blocked. The other two are
+          # transient — reopen the issue, close the PR, and the same run would
+          # now proceed — whereas a shape refusal will repeat verbatim until
+          # somebody restructures the work. `agent:blocked` is what records
+          # that on the issue itself; the transition step below clears it when a
+          # run does start.
+          refuse_shape() {
+            gh issue edit "$ISSUE_NUMBER" --add-label "agent:blocked" || true
+            refuse "$1"
+          }
+
+          if [ "$ISSUE_STATE" != "open" ]; then
+            refuse "Refused to run: this issue is not open. Reopen it first, then re-add \`agent:implement\`."
           fi
+
+          # One query for the whole shape — parent, sub-issues and labels
+          # together. Asking separately is two chances to see a different
+          # answer, and every branch below reads the same snapshot.
+          #
+          # Deliberately not `|| true`. Every other guard in these workflows
+          # proceeds when an API call comes back empty, on the grounds that a
+          # blip is not evidence; this one is the exception, because "no answer"
+          # read as "standalone" is exactly the isolated sub-issue run the guard
+          # exists to prevent. A failed query fails the step, which leaves the
+          # trigger label in place and the run visibly red.
+          issue=$(gh api graphql \
+            -f owner="${GH_REPO%/*}" -f name="${GH_REPO#*/}" -F number="$ISSUE_NUMBER" \
+            -f query='
+              query($owner: String!, $name: String!, $number: Int!) {
+                repository(owner: $owner, name: $name) {
+                  issue(number: $number) {
+                    parent { number }
+                    subIssues(first: 1) { totalCount }
+                    labels(first: 100) { nodes { name } }
+                  }
+                }
+              }' \
+            --jq '.data.repository.issue')
+
+          parent=$(jq -r '.parent.number // ""' <<< "$issue")
+          subs=$(jq -r '.subIssues.totalCount' <<< "$issue")
+          # Separator carries the backticks so two wayfinder labels render as
+          # two code spans in the comment, not one span holding a comma.
+          wayfinder=$(jq -r '[.labels.nodes[].name | select(startswith("wayfinder:"))] | join("`, `")' <<< "$issue")
+
+          if [ -n "$parent" ]; then
+            shape=has-parent
+          elif [ "$subs" -gt 0 ]; then
+            shape=has-sub-issues
+          else
+            shape=standalone
+          fi
+          echo "shape=$shape" >> "$GITHUB_OUTPUT"
+
+          # Checked before the hierarchy, since a wayfinder ticket is refused
+          # whichever shape it happens to have.
+          if [ -n "$wayfinder" ]; then
+            refuse_shape "Refused to run: this issue carries \`${wayfinder}\`. Wayfinder maps and decision tickets are planning artifacts, not implementable work — they describe what to build and where the decisions are. Label the issues they produce instead."
+          fi
+
+          if [ "$shape" = "has-parent" ]; then
+            refuse_shape "Refused to run: this issue is a sub-issue of #${parent}. Sub-issues are driven by their parent, never labelled directly — implemented alone, this one loses the ordering and the shared context the parent holds."
+          fi
+
+          if [ "$shape" = "has-sub-issues" ]; then
+            refuse_shape "Refused to run: this issue has ${subs} sub-issue(s), so it is a PRD-shaped parent rather than a unit of work. The PRD path that works sub-issues in sequence is not built yet; until it lands, implement the slices by hand."
+          fi
+
           existing=$(gh pr list --state open --json number,url,body \
             --jq "[.[] | select(.body | test(\"(?i)(closes|fixes|resolves)\\\\s+#${ISSUE_NUMBER}\\\\b\"))] | .[0].url // empty")
           if [ -n "$existing" ]; then
-            echo "refused=true" >> "$GITHUB_OUTPUT"
-            gh issue edit "$ISSUE_NUMBER" --remove-label "agent:implement" || true
-            gh issue comment "$ISSUE_NUMBER" --body "Refused to run: $existing already targets this issue. Close it first, then re-add \`agent:implement\`."
-          else
-            echo "refused=false" >> "$GITHUB_OUTPUT"
+            refuse "Refused to run: $existing already targets this issue. Close it first, then re-add \`agent:implement\`."
           fi
+          echo "refused=false" >> "$GITHUB_OUTPUT"
 
       # The trigger label is consumed, not left in place. That is what makes a
       # retry idempotent: a human re-adds it deliberately.
@@ -175,8 +254,15 @@ jobs:
             echo "::warning::AGENT_PAT is not set, so this label was added with GITHUB_TOKEN and will NOT trigger agent-review. Add agent:review by hand on PR #${NEW_PR}."
           fi
 
+      # `!= 'true'`, not `== 'false'` like every other gate here. A preflight
+      # that fails hard — the shape query erroring on a schema or permissions
+      # mismatch — exits before writing the output at all, and `''` is not
+      # `'false'`, so an equality gate skipped this step precisely when the
+      # issue most needed the comment: nothing on the issue, `agent:implement`
+      # still attached, and a red run nobody is watching. Refusals exit 0, so
+      # `failure()` keeps them out of here regardless.
       - name: Mark blocked on failure
-        if: steps.preflight.outputs.refused == 'false' && failure()
+        if: steps.preflight.outputs.refused != 'true' && failure()
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -185,7 +271,14 @@ jobs:
             reason=$(cat "${RUNNER_TEMP}/failure_reason.txt")
           fi
           body_file="${RUNNER_TEMP}/failure-comment.md"
-          printf '`agent:implement` run failed.\n\n**Reason:** %s\n\n**Workflow run:** %s\n\nRe-add `agent:implement` to retry.\n' "$reason" "$RUN_URL" > "$body_file"
+          # "Re-apply", not "re-add", and the removal clause is load-bearing. This
+          # step now also covers a preflight that failed *before* `Transition
+          # labels` ran, where `agent:implement` is still attached — and adding a
+          # label that is already present fires no `labeled` event, so a literal
+          # "re-add" is inert on exactly the path this gate was widened to catch
+          # (docs/ADOPTING.md §1). One wording is correct on both paths: consumed,
+          # and never consumed.
+          printf '`agent:implement` run failed.\n\n**Reason:** %s\n\n**Workflow run:** %s\n\nRe-apply `agent:implement` to retry. If it is still attached, remove it first — adding a label that is already present fires no event.\n' "$reason" "$RUN_URL" > "$body_file"
           gh issue edit "$ISSUE_NUMBER" --add-label "agent:blocked" || true
           gh issue comment "$ISSUE_NUMBER" --body-file "$body_file"
 
