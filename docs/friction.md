@@ -1199,6 +1199,85 @@ table went into the issue. Cost: one command.
 
 ---
 
+## 2026-08-07 — Two PRs improving the same doc, and a tiebreaker that only points one way
+
+#100 and #101 were deliberately paired as the one genuinely parallel-safe batch: disjoint file
+sets, no shared code. They ran concurrently and both produced clean, reviewed PRs. Then both
+review agents independently flagged the *same* stale row in `docs/ADOPTING.md` §5, both fix agents
+acted on it, and the two PRs collided on a file neither issue was about.
+
+### The mechanism, because it will recur
+
+The conflict did not come from either issue's scope. It came from **review judgement calls**. #101
+was told to add a missing site to the coupling table; its review found the added sentence factually
+wrong and the fix corrected it. #104's review noticed the whole row had gone stale after #71, as a
+side observation, and its fix re-derived the entire inventory. Two agents, two different tickets,
+one table cell.
+
+So the parallel-safety check that mattered was not "do these issues touch the same files" — that
+was true and still insufficient. It was "**can the review agents reach the same file**", and every
+review can reach every doc. Disjoint scopes do not imply disjoint diffs once reviews are in the
+loop. On a repo where `parity.md` and `ADOPTING.md` are consulted by every ticket, they are the
+registry, and they behave exactly like `src/rules/index.ts`.
+
+### Which is why the update-branch tiebreaker matters here
+
+`update-branch/prompt.md` resolves incompatible sides by favouring **the one matching this PR's
+stated goal**. That is a *directional* rule, not a quality one, and the asymmetry is real:
+
+- Refreshing #103 against a merged #104: #103's goal *is* improving that row, so goal-alignment and
+  quality point the same way.
+- Refreshing #104 against a merged #103: #104's goal is the base-ref fix. Its better, re-derived row
+  arrived from a review side-note, so under the stated rule the stronger text has the *weaker*
+  claim.
+
+Two things make this worse than an ordinary conflict. `npm run verify` is **blind** to it — it
+typechecks and runs tests, and cannot evaluate a Markdown table, so the gate that catches a bad
+`src/rules/index.ts` merge gives zero signal here. And "preserve both wherever possible" is
+actively wrong for a prose inventory: two merged site-lists produce a row that reads fine and
+double-counts. The prompt warns about textually-trivial-but-semantically-real conflicts using the
+*code* example; the prose case is the same failure with no test behind it.
+
+**Recorded, not fixed.** This is one predicted collision, not an observed bad resolution — building
+a new tiebreaker now would be designing against a hypothesis, the same reasoning that left stale-script
+detection unbuilt. The levers if it does resolve badly, in order: merge the fuller PR first;
+raise `AGENT_MODEL_UPDATE_BRANCH` (`common.ts:56-62` already nominates this row as the first thing
+to suspect); resolve one table cell by hand. Only after a real failure is there a ticket worth
+writing.
+
+### The fix agents were the best output of the round
+
+Six threads across the two PRs, all addressed, all resolved, no declines — and none of the six was
+a compliant application of the suggestion.
+
+- #103 took the blocking suggestion but *narrowed* it, writing "the only **unconditional** `main` in
+  a runner" because `pr-feedback.ts:101` hardcodes one too, as a fallback the reviewer's wording had
+  flattened.
+- #103 chose the harder of two offered options — deriving the `issues: write` check from
+  `workflowFiles` minus an exempt set, rather than narrowing the `parity.md` sentence to match the
+  weaker check — and proved it by planting `issues: write` in `ci.yml`, a file the old allowlist
+  never covered.
+- #104, asked to either widen a test's pattern or rename it to match, widened — and found that
+  `runBlockLines` only tracked `run: |` block scalars, so `agent-review.yml:74`'s inline `run:`
+  fetch, *the exact line #71 fixed*, was exempt from all three workflow tests. Including the
+  empty-expression guard that exists because `agent-fix.yml` was down for two days.
+- #104 re-derived the coupling inventory rather than patching it and added a site the reviewer had
+  missed, `implement/implement.ts:56`.
+
+The pattern worth keeping: **neither agent took a reviewer's premise on trust**, and both verified
+by injecting a regression and watching it fail rather than by asserting. #104 explicitly checked
+that `runWithExtraction` drops `promptArgs` before agreeing that templating could not reach
+`extraction.md`.
+
+### A human error the loop caught
+
+The `implement.ts` line number in #101 was written as `:58` from memory. It is `:56`. #104's fix
+agent re-derived it and got it right. Same lesson as the `git check-ref-format` entry above, failed
+rather than passed this time: one `grep` would have settled it, and the cost of not running it was
+a wrong line number published in an issue body that an agent then implemented from.
+
+---
+
 ## Pending — not yet exercised
 
 The full cycle is proven, including replies, resolution, and conflict resolution. Still
