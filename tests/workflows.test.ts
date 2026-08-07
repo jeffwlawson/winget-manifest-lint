@@ -470,7 +470,7 @@ describe("agent-implement refuses a closed issue", () => {
  * - **`wayfinder:*`** — maps and decision tickets are planning artifacts. They
  *   describe work; they are not work.
  *
- * All three are refused in the preflight step, which is what keeps them job-…
+ * All three are refused in the preflight step, which is what keeps them job-level
  * rather than agent-level: no checkout, no `npm ci`, no `agent:in-progress`.
  */
 describe("agent-implement refuses issue shapes it cannot handle", () => {
@@ -535,14 +535,34 @@ describe("agent-implement refuses issue shapes it cannot handle", () => {
    * step leaves the trigger label in place and the run visibly red.
    */
   it("does not swallow a failed shape query", () => {
-    const shapeQuery = preflightRun()
+    // Keyed on the tolerance, not the command: `|| true` would land on the
+    // *closing* line of a multi-line query, several lines below the one
+    // naming `gh`, so a filter on `gh api graphql` never sees it.
+    const tolerant = preflightRun()
       .split("\n")
-      .filter((l) => l.includes("gh api graphql") || l.includes("gh pr list"));
+      .filter((l) => l.includes("|| true") && !l.trimStart().startsWith("#"));
 
-    for (const line of shapeQuery) expect(line).not.toContain("|| true");
+    expect(tolerant).not.toHaveLength(0);
+    for (const line of tolerant) expect(line).toContain("gh issue edit");
   });
 
   const NOT_REFUSED = "steps.preflight.outputs.refused == 'false'";
+
+  /**
+   * Refusing to swallow a failed shape query only helps if the failure reaches
+   * the issue. A preflight that dies mid-step writes no `refused` output at
+   * all, and `''` is not `'false'` — so the failure notice has to be gated on
+   * `!= 'true'`, or the one step that comments the reason is skipped exactly
+   * when the reason is a red run nobody is watching.
+   */
+  it("comments on a preflight that fails rather than refuses", () => {
+    // Identified by the reason file, not by `agent:blocked` — the preflight
+    // step adds that label too, and it sorts first.
+    const blocked = stepsOf(FILE).find((s) => (s.run ?? "").includes("failure_reason.txt"));
+
+    expect(blocked?.if ?? "").toContain("steps.preflight.outputs.refused != 'true'");
+    expect(blocked?.if ?? "").toContain("failure()");
+  });
 
   /**
    * The job-level `if:` saves a runner for the wrong *label*; this saves the

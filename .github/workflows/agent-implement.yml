@@ -254,8 +254,15 @@ jobs:
             echo "::warning::AGENT_PAT is not set, so this label was added with GITHUB_TOKEN and will NOT trigger agent-review. Add agent:review by hand on PR #${NEW_PR}."
           fi
 
+      # `!= 'true'`, not `== 'false'` like every other gate here. A preflight
+      # that fails hard — the shape query erroring on a schema or permissions
+      # mismatch — exits before writing the output at all, and `''` is not
+      # `'false'`, so an equality gate skipped this step precisely when the
+      # issue most needed the comment: nothing on the issue, `agent:implement`
+      # still attached, and a red run nobody is watching. Refusals exit 0, so
+      # `failure()` keeps them out of here regardless.
       - name: Mark blocked on failure
-        if: steps.preflight.outputs.refused == 'false' && failure()
+        if: steps.preflight.outputs.refused != 'true' && failure()
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
