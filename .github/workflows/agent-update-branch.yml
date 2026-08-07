@@ -24,9 +24,10 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Shared with agent:fix — both mutate and push the same branch.
+    # One group per PR — shared with agent:fix, which pushes the same branch,
+    # and agent:review, which reads it while a push would move it (#102).
     concurrency:
-      group: agent-mutate-pr-${{ github.event.pull_request.number }}
+      group: agent-pr-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     permissions:
       contents: write
