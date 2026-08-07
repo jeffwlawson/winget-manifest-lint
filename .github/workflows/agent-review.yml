@@ -23,9 +23,10 @@ jobs:
       group: agent-review-pr-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     # `contents: read` is the invariant that bounds what a wrong review can do
-    # (docs/parity.md §10). No `issues: write`: review files nothing, and
-    # `gh pr edit --add-label` below is covered by `pull-requests: write`
-    # because a PR is an issue to that API.
+    # (docs/parity.md §10). No `issues: write`: review files nothing, and the
+    # `gh pr edit --add-label` steps below need only `pull-requests: write` —
+    # that scope covers labels on a PR, which is why agent-fix.yml and
+    # agent-update-branch.yml already label unguarded without it.
     permissions:
       contents: read
       pull-requests: write

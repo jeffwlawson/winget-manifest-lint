@@ -167,13 +167,13 @@ The workflows are not yet parameterised. These are the couplings to edit by hand
 
 | Assumption | Where | Notes |
 |---|---|---|
-| Default branch is `main` | ~11 sites across all four workflows, plus `shared/pr-feedback.ts` and `implement/implement.ts` (`git rev-list --count main..HEAD`, the only hardcoded `main` in a runner rather than in YAML — miss it and implement reports "no commits were made" on every PR stacked elsewhere) | if yours is `master`/`develop`, every diff and base is wrong |
+| Default branch is `main` | ~11 sites across all four workflows, plus `shared/pr-feedback.ts` and `implement/implement.ts` (`git rev-list --count main..HEAD` — the only unconditional `main` in a runner rather than in YAML, everywhere else it is a fallback behind the PR's real base; and the only site here that *hard-errors*, because `sh` is `execSync`, so a missing `main` ref aborts the run) | if yours is `master`/`develop`, every diff and base is wrong |
 | `npm ci`, `npm run verify`, `.nvmrc` | four workflows, and `implement` / `fix` / `update-branch` prompts | the whole toolchain assumption; a non-Node repo replaces all of it |
 | `CONTEXT.md` and `CLAUDE.md` exist | every prompt reads them first | see §6 |
 | Project domain | `implement/prompt.md` has an "IF THIS ISSUE ADDS A RULE" section; it and `review/prompt.md` cite this repo's domain model (role vs. `ManifestType`, the rule classes); `fix/prompt.md` and `update-branch/prompt.md` cite `src/rules/index.ts` | roughly half of `implement/prompt.md` is this repo's domain. The extraction prompts and the rest of `review/prompt.md` are already domain-neutral |
 
-Nothing above will error — it will produce agents confidently doing the wrong project's
-conventions. Budget real time for the prompts specifically.
+With the one exception called out above, nothing here will error — it will produce agents
+confidently doing the wrong project's conventions. Budget real time for the prompts specifically.
 
 ---
 

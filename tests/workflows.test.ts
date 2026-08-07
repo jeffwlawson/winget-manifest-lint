@@ -27,15 +27,22 @@ const workflowFiles = fs
   .map((f) => path.join(WORKFLOW_DIR, f));
 
 /**
- * The PR-acting agents. `agent-implement` is excluded on purpose: it reads the
- * issue and transitions its labels, so `issues: write` is the permission it
- * actually uses.
+ * The only workflows allowed to hold `issues: write`, each with the reason it
+ * needs one. Everything else is derived, not listed: a workflow added later is
+ * held to the rule on arrival rather than on someone remembering to add it to a
+ * list — which is the same granted-but-unnoticed failure the check exists to
+ * catch, one level up.
  */
-const PR_WORKFLOWS = [
-  "agent-fix.yml",
-  "agent-review.yml",
-  "agent-update-branch.yml",
-].map((f) => path.join(WORKFLOW_DIR, f));
+const ISSUES_WRITE_EXEMPT = new Set([
+  // Reads the issue and transitions its labels; the permission is used.
+  "agent-implement.yml",
+  // Files the AGENT_PAT expiry issue. Acts on no PR at all.
+  "token-expiry.yml",
+]);
+
+const issuesWriteChecked = workflowFiles.filter(
+  (f) => !ISSUES_WRITE_EXEMPT.has(path.basename(f)),
+);
 
 const indentOf = (s: string): number => s.length - s.trimStart().length;
 
@@ -112,11 +119,11 @@ describe("workflow files", () => {
   /**
    * `docs/parity.md` §10: an agent that raises work never files it. The
    * permission is what makes that technical rather than conventional, so it has
-   * to stay absent from every agent that acts on a PR — including `review`,
-   * which was granted it unused (#101). Granted-but-unused reads as sanctioned
-   * to the next person editing the file.
+   * to stay absent from everything outside `ISSUES_WRITE_EXEMPT` — including
+   * `review`, which was granted it unused (#101). Granted-but-unused reads as
+   * sanctioned to the next person editing the file.
    */
-  it.each(PR_WORKFLOWS)("%s: grants no issues: write", (file) => {
+  it.each(issuesWriteChecked)("%s: grants no issues: write", (file) => {
     const lines = fs.readFileSync(file, "utf8").split("\n");
     const inRun = runBlockLines(lines);
 
