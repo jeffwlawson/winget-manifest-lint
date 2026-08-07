@@ -308,6 +308,18 @@ expensive to rediscover.
   job-level `if:` cannot supply one, since it reads context data only and is evaluated after the
   group frees.
 
+  **The collapse extends that rule across workflows, and the loss is silent.** The waiter slot is
+  per *group*, not per workflow, so a queued review is now evictable by a mutate label — which it
+  was not in `agent-review-pr-*`, where nothing else could reach it. Concretely: `agent:fix` is
+  running on PR *n*, a human adds `agent:review` (takes the waiter slot), then adds
+  `agent:update-branch` — a third arrival, so by the rule above the queued review is cancelled
+  before its first step. Having run nothing it never reached `Transition labels`, so `agent:review`
+  is still on the PR with no comment and no `agent:blocked`: it reads as pending and will never
+  run, and re-adding a label already present fires no `labeled` event, so recovery is
+  remove-then-re-add. Accepted rather than fixed, because a cancelled run executes no step —
+  nothing inside these workflows can observe or report it — and the alternative is the separate
+  group whose race this invariant exists to close.
+
   **Residual, recorded against #92 (PRD tier).** Once `agent-implement-prd` lands it pushes to a
   PR's branch under `agent-implement-prd-issue-<parent>` while review and fix use
   `agent-pr-<prNumber>` — different groups, so the same read-during-write race exists one level up.
@@ -332,6 +344,15 @@ expensive to rediscover.
   refused label leaves behind, not in what gets refused. Unify it in either direction when someone
   next touches these — the argument for the label is that a comment scrolls away; against, that a
   merged PR keeps a stale `agent:blocked` nobody will ever clear.
+
+  Re-examined in #105 for the moved-head refusal specifically, where the PR being refused is
+  healthy and green, and kept, on two grounds. The label is defined as "a run failed **or was
+  refused**; needs human attention" (docs/ADOPTING.md §3), and attention is precisely what is owed:
+  `refuse()` also consumes `agent:review`, so without the label a PR that silently never got
+  reviewed carries no signal at all. And this refusal is self-clearing where the closed/merged one
+  is not — the remedy the comment gives is re-adding `agent:review`, and `Transition labels`
+  removes `agent:blocked` on the way in. So the objection above (a stale label nobody clears)
+  applies to the terminal-state refusal only.
 - **Only `addressed` resolves a thread.** A `declined` thread keeps its reply and stays open, so a
   human can push back; auto-resolving a decline lets an agent bury a disagreement silently.
 - **Every world-writable input is author-gated.** Issue and PR text reaches agents only from

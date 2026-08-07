@@ -352,14 +352,14 @@ describe("PR workflows refuse a closed or merged PR", () => {
     expect(first?.run ?? "").toContain('"$PR_MERGED" = "true"');
   });
 
+  const PROCEED = "steps.state.outputs.proceed == 'true'";
+
   /**
    * The two things a refused run must not have done: checked the branch out,
    * and told the PR an agent is working on it. Both are asserted on the step
    * that does them rather than on step order, so moving a step cannot quietly
    * escape the guard.
    */
-  const PROCEED = "steps.state.outputs.proceed == 'true'";
-
   it.each(PR_WORKFLOWS)("%s: checkout is gated on the guard", (file) => {
     const checkout = stepsOf(file).filter((s) => (s.uses ?? "").startsWith("actions/checkout@"));
 
