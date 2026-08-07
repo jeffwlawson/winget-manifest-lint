@@ -36,7 +36,12 @@ const workflowFiles = fs
 
 const indentOf = (s: string): number => s.length - s.trimStart().length;
 
-/** Line numbers (1-based) that sit inside a `run:` block scalar. */
+/**
+ * Line numbers (1-based) GitHub hands to the shell: the body of a `run:` block
+ * scalar, and a single-line `run: <command>`. The inline form matters —
+ * `agent-review.yml`'s base fetch is written that way, so a check that only
+ * walked block scalars would pass over the very line #71 fixed.
+ */
 const runBlockLines = (lines: readonly string[]): ReadonlySet<number> => {
   const inside = new Set<number>();
   let runIndent: number | null = null;
@@ -44,6 +49,11 @@ const runBlockLines = (lines: readonly string[]): ReadonlySet<number> => {
   for (const [i, line] of lines.entries()) {
     if (/^\s*(- )?run:\s*[|>]/.test(line ?? "")) {
       runIndent = indentOf(line ?? "");
+      continue;
+    }
+    if (/^\s*(- )?run:\s*\S/.test(line ?? "")) {
+      inside.add(i + 1);
+      runIndent = null;
       continue;
     }
     if (runIndent === null) continue;
@@ -122,18 +132,25 @@ describe("PR workflows work against the PR's base ref", () => {
   });
 
   /**
-   * Only `run:` blocks — a YAML comment may say `origin/main` while explaining
-   * the fallback, and `${BASE_REF:-main}` is the fallback itself, not a
-   * hardcode.
+   * The word, not just `origin/main`. The failure class is "a git verb was
+   * handed `main`", which `git merge main --no-edit`, `git rev-parse main` and
+   * `base="main"` all are while matching no `origin/`-shaped pattern.
+   *
+   * Two exemptions, both narrow. Shell lines only, so a YAML comment may still
+   * say `origin/main` while explaining the fallback. And `${VAR:-main}` is
+   * stripped before the check: that *is* the fallback, reached only when
+   * `base.ref` is somehow empty.
    */
-  it.each(PR_WORKFLOWS)("%s: no git operation names a literal main ref", (file) => {
+  const FALLBACK = /\$\{[A-Za-z_][A-Za-z0-9_]*:-main\}/g;
+
+  it.each(PR_WORKFLOWS)("%s: no shell line names main as a branch", (file) => {
     const lines = fs.readFileSync(file, "utf8").split("\n");
     const inRun = runBlockLines(lines);
 
     const offenders = lines
       .map((line, i) => ({ line, n: i + 1 }))
       .filter(({ line, n }) => inRun.has(n) && !/^\s*#/.test(line))
-      .filter(({ line }) => /\borigin\/main\b|\brefs\/heads\/main\b/.test(line))
+      .filter(({ line }) => /\bmain\b/.test(line.replace(FALLBACK, "")))
       .map(({ line, n }) => `${file}:${n} ${line.trim()}`);
 
     expect(offenders).toEqual([]);
@@ -143,11 +160,25 @@ describe("PR workflows work against the PR's base ref", () => {
    * The prompt tells the agent which merge it is cleaning up after. Naming
    * `main` there on a stacked PR sends it reading the wrong branch's history to
    * reconcile a conflict that came from somewhere else.
+   *
+   * `extraction.md` is checked too, and is the one that bites hardest: on the
+   * conflicts path its output *is* the comment posted to the PR, and it cannot
+   * be templated — `runWithExtraction` drops `promptArgs` before the extraction
+   * run, so a `{{BASE_REF}}` there would arrive literal. A `main`-shaped
+   * few-shot is the whole steer it gets.
    */
-  it("update-branch/prompt.md names the base ref rather than main", () => {
+  it.each(["prompt.md", "extraction.md"])(
+    "update-branch/%s does not hardcode main",
+    (name: string) => {
+      const text = fs.readFileSync(`.sandcastle/agent-workflows/update-branch/${name}`, "utf8");
+
+      expect(text).not.toMatch(/\borigin\/main\b|`main`/);
+    },
+  );
+
+  it("update-branch/prompt.md is templated with the base ref", () => {
     const prompt = fs.readFileSync(".sandcastle/agent-workflows/update-branch/prompt.md", "utf8");
 
     expect(prompt).toContain("{{BASE_REF}}");
-    expect(prompt).not.toMatch(/\borigin\/main\b|`main`/);
   });
 });
