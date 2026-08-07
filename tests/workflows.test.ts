@@ -26,6 +26,17 @@ const workflowFiles = fs
   .filter((f) => f.endsWith(".yml") || f.endsWith(".yaml"))
   .map((f) => path.join(WORKFLOW_DIR, f));
 
+/**
+ * The PR-acting agents. `agent-implement` is excluded on purpose: it reads the
+ * issue and transitions its labels, so `issues: write` is the permission it
+ * actually uses.
+ */
+const PR_WORKFLOWS = [
+  "agent-fix.yml",
+  "agent-review.yml",
+  "agent-update-branch.yml",
+].map((f) => path.join(WORKFLOW_DIR, f));
+
 const indentOf = (s: string): number => s.length - s.trimStart().length;
 
 /** Line numbers (1-based) that sit inside a `run:` block scalar. */
@@ -94,6 +105,25 @@ describe("workflow files", () => {
       .map((line, i) => ({ line, n: i + 1 }))
       .filter(({ line, n }) => inRun.has(n) && /^\s*#/.test(line) && line.includes("${{"))
       .map(({ line, n }) => `${file}:${n} ${line.trim()}`);
+
+    expect(offenders).toEqual([]);
+  });
+
+  /**
+   * `docs/parity.md` §10: an agent that raises work never files it. The
+   * permission is what makes that technical rather than conventional, so it has
+   * to stay absent from every agent that acts on a PR — including `review`,
+   * which was granted it unused (#101). Granted-but-unused reads as sanctioned
+   * to the next person editing the file.
+   */
+  it.each(PR_WORKFLOWS)("%s: grants no issues: write", (file) => {
+    const lines = fs.readFileSync(file, "utf8").split("\n");
+    const inRun = runBlockLines(lines);
+
+    const offenders = lines
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line, n }) => !inRun.has(n) && /^\s*issues:\s*write\s*$/.test(line))
+      .map(({ n }) => `${file}:${n}`);
 
     expect(offenders).toEqual([]);
   });
