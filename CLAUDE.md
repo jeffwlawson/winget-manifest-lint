@@ -42,3 +42,26 @@ Rule ids are kebab-case, stable, and never renamed once merged — they appear i
 
 Authored on Windows, executed on Linux CI. `.gitattributes` normalises everything to LF.
 Do not add files that defeat it, and do not commit a `.editorconfig` that disagrees with it.
+
+## Agent skills
+
+Per-repo config for the `mattpocock/skills` engineering skills, read by `/triage`, `/to-tickets`,
+`/to-spec` and `/wayfinder`. These skills are run **locally, by a human** — the `agent-*` CI
+workflows do not load them, and nothing here changes the gate above.
+
+### Issue tracker
+
+GitHub Issues in `jeffwlawson/winget-manifest-lint`, via the `gh` CLI.
+See [`docs/agents/issue-tracker.md`](./docs/agents/issue-tracker.md).
+
+### Triage labels
+
+The five canonical roles, kept at their default strings. They are a separate vocabulary from the
+`agent:*` workflow labels, and `ready-for-agent` → `agent:implement` is human-gated by design.
+See [`docs/agents/triage-labels.md`](./docs/agents/triage-labels.md).
+
+### Domain docs
+
+Single-context: [CONTEXT.md](./CONTEXT.md) at the root, no `docs/adr/` yet. `docs/agents/domain.md`
+is a pointer to it, not a second copy of it.
+See [`docs/agents/domain.md`](./docs/agents/domain.md).
