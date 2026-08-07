@@ -271,7 +271,14 @@ jobs:
             reason=$(cat "${RUNNER_TEMP}/failure_reason.txt")
           fi
           body_file="${RUNNER_TEMP}/failure-comment.md"
-          printf '`agent:implement` run failed.\n\n**Reason:** %s\n\n**Workflow run:** %s\n\nRe-add `agent:implement` to retry.\n' "$reason" "$RUN_URL" > "$body_file"
+          # "Re-apply", not "re-add", and the removal clause is load-bearing. This
+          # step now also covers a preflight that failed *before* `Transition
+          # labels` ran, where `agent:implement` is still attached — and adding a
+          # label that is already present fires no `labeled` event, so a literal
+          # "re-add" is inert on exactly the path this gate was widened to catch
+          # (docs/ADOPTING.md §1). One wording is correct on both paths: consumed,
+          # and never consumed.
+          printf '`agent:implement` run failed.\n\n**Reason:** %s\n\n**Workflow run:** %s\n\nRe-apply `agent:implement` to retry. If it is still attached, remove it first — adding a label that is already present fires no event.\n' "$reason" "$RUN_URL" > "$body_file"
           gh issue edit "$ISSUE_NUMBER" --add-label "agent:blocked" || true
           gh issue comment "$ISSUE_NUMBER" --body-file "$body_file"
 
