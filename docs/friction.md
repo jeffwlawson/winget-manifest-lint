@@ -1320,6 +1320,37 @@ plausible one and acted on the sound ones, which is the discrimination the chann
 Per §10 the thread stayed open, and both arguments went into `parity.md` §10 rather than living only
 in a review thread.
 
+### A silent failure that was not the one it looked like
+
+Fifteen issues were published for the loop's own backlog, two of them carrying `agent:implement` in
+the create call. Nothing ran.
+
+**The real cause, and it is permanent.** `agent-implement.yml` triggers on `issues: types:
+[labeled]` and gates on `github.event.label.name`. Labels supplied in the *create* call produce only
+`issues.opened` — they ride along in that payload, but no `labeled` event is emitted and
+`github.event.label` does not exist on `opened`. So the label is genuinely on the issue, and the
+workflow correctly never saw an event. This is a **fifth member of the §1 family** in
+`ADOPTING.md`, alongside the four `GITHUB_TOKEN` traps, and it has the same signature: the label
+appears, everything looks right, nothing happens. Anything publishing issues programmatically must
+label in a **separate call** from creation.
+
+**The cause that was not real.** Removing and re-adding the label through the same tool did not
+dispatch either, which looked like a second, independent trap — an app identity's label adds being
+suppressed the way `GITHUB_TOKEN`'s are. That got stated as a finding, with the corollary that
+`parity.md` §9.4's GitHub App plan would break the cascade rather than fix it.
+
+Wrong. GitHub Actions was having a platform incident during that window. Retested at 19:39 the same
+day by labelling #90 from the identical identity: run 41 dispatched normally, and the agent worked
+the issue. §9.4 is unaffected.
+
+**The lesson is about diagnosis, not about labels.** A platform incident and the documented
+anti-recursion rule produce an *identical* signature from inside the repo — label present, no run,
+no error, nothing in any log. One observation cannot separate them, and the wrong conclusion is the
+more expensive one, because it invents a structural constraint that then shapes design decisions
+(here, nearly writing off the GitHub App path). The discipline that keeps working elsewhere in this
+log applies: the anti-recursion rule is documented and *retestable*; an outage is neither, so
+re-running the experiment later is the cheap check that separates them. It cost one relabel.
+
 ### A human error the loop caught
 
 The `implement.ts` line number in #101 was written as `:58` from memory. It is `:56`. #104's fix
