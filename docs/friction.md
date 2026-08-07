@@ -1291,6 +1291,35 @@ by injecting a regression and watching it fail rather than by asserting. #104 ex
 that `runWithExtraction` drops `promptArgs` before agreeing that templating could not reach
 `extraction.md`.
 
+### The first decline, and it was the right one
+
+#105 (concurrency + preflight parity) produced the pilot's first `declined` thread. Worth recording
+because the decline mechanism has existed since #49/#50 and had never fired — every prior round
+addressed everything.
+
+The review argued that `refuse()` adds `agent:blocked` for the stale-head case too, labelling a PR
+whose fix had just succeeded: healthy, green, and wearing the label the pipeline uses for failure.
+Plausible, specific, and wrong on its premise — `ADOPTING.md:128` defines the label as "A run failed
+**or was refused**; needs human attention", so a refusal is inside its stated meaning.
+
+The agent declined on three grounds, and the second is the one that matters: `refuse()` also
+*consumes* `agent:review`, so dropping the `agent:blocked` add leaves a PR with no trigger label, no
+review, and nothing saying either — the exact silent-failure shape the ticket exists to close. A red
+label on a green PR is noise; an unreviewed PR that looks finished is the failure. It also inverted
+the reviewer's stickiness worry correctly: this refusal is self-clearing, because the remedy it
+prints is re-adding `agent:review` and `Transition labels` strips `agent:blocked` on entry. The
+closed/merged refusal is the sticky one.
+
+A fourth argument neither side made settles it: consuming `agent:review` is what makes recovery work
+at all. Because the label was removed, re-adding it fires a fresh `labeled` event — had the workflow
+left it in place, recovery would need remove-then-re-add, the trap #100 hit the same day.
+
+What makes this a good decline rather than a lucky one: the same round *addressed* the two findings
+that were correct, including a real regression the collapse had introduced. It declined the
+plausible one and acted on the sound ones, which is the discrimination the channel was built for.
+Per §10 the thread stayed open, and both arguments went into `parity.md` §10 rather than living only
+in a review thread.
+
 ### A human error the loop caught
 
 The `implement.ts` line number in #101 was written as `:58` from memory. It is `:56`. #104's fix
