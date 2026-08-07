@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 /**
  * Guards `.github/workflows/**` against a failure class nothing else here
@@ -53,6 +54,35 @@ const issuesWriteChecked = workflowFiles.filter(
 );
 
 const indentOf = (s: string): number => s.length - s.trimStart().length;
+
+interface Step {
+  readonly name?: string;
+  readonly id?: string;
+  readonly if?: string;
+  readonly uses?: string;
+  readonly run?: string;
+  readonly env?: Record<string, string>;
+}
+
+interface Job {
+  readonly concurrency?: { readonly group?: string; readonly "cancel-in-progress"?: boolean };
+  readonly steps?: readonly Step[];
+}
+
+/**
+ * The single job each agent workflow declares. Parsed rather than pattern
+ * matched: the checks below are about step *order* and which step carries which
+ * `if:`, and a regex over the raw text cannot see either.
+ */
+const jobOf = (file: string): Job => {
+  const doc = parse(fs.readFileSync(file, "utf8")) as { jobs: Record<string, Job> };
+  const jobs = Object.values(doc.jobs);
+
+  expect(jobs).toHaveLength(1);
+  return jobs[0] as Job;
+};
+
+const stepsOf = (file: string): readonly Step[] => jobOf(file).steps ?? [];
 
 /**
  * Line numbers (1-based) GitHub hands to the shell: the body of a `run:` block
@@ -217,5 +247,140 @@ describe("PR workflows work against the PR's base ref", () => {
     const prompt = fs.readFileSync(".sandcastle/agent-workflows/update-branch/prompt.md", "utf8");
 
     expect(prompt).toContain("{{BASE_REF}}");
+  });
+});
+
+/**
+ * One group per PR, across every workflow that touches it (#102). Review used
+ * to sit in `agent-review-pr-*` while fix and update-branch shared
+ * `agent-mutate-pr-*`, so a review could diff a branch *while* a fix pushed to
+ * it — a review of a tree state that never existed. The hazard is review
+ * reading during another job's write, which its `contents: read` does nothing
+ * to prevent.
+ */
+describe("every PR workflow shares one concurrency group per PR", () => {
+  const PR_GROUP = "agent-pr-${{ github.event.pull_request.number }}";
+
+  it.each(PR_WORKFLOWS)("%s: is in the per-PR group, first-come", (file) => {
+    const { concurrency } = jobOf(file);
+
+    expect(concurrency?.group).toBe(PR_GROUP);
+    expect(concurrency?.["cancel-in-progress"]).toBe(false);
+  });
+
+  /**
+   * A group declared at workflow level too would put the same job in two
+   * groups, which GitHub rejects; a second job-level one would mean a second
+   * job, which `jobOf` already refuses.
+   */
+  /**
+   * Sharing a group turns review's CI wait into a trap: a `fix` labelled
+   * mid-review is queued behind it, a queued job is a check run in a
+   * non-completed state, and review would spend 15 of its 20 minutes waiting
+   * for a job that cannot start until review ends. Every agent job is excluded
+   * from the wait, not just review's own.
+   */
+  it("agent-review waits on no agent job", () => {
+    const wait = stepsOf(path.join(WORKFLOW_DIR, "agent-review.yml")).find((s) =>
+      (s.name ?? "").startsWith("Wait for other checks"),
+    );
+    const excluded = wait?.env?.["AGENT_CHECKS"] ?? "";
+
+    for (const job of ["review", "fix", "update-branch", "implement"]) {
+      expect(excluded).toContain(job);
+    }
+    expect(wait?.run ?? "").toContain("AGENT_CHECKS");
+  });
+
+  it.each(PR_WORKFLOWS)("%s: declares exactly one group", (file) => {
+    const groups = [...fs.readFileSync(file, "utf8").matchAll(/^\s*group:\s*(.+)$/gm)].map((m) =>
+      (m[1] ?? "").trim(),
+    );
+
+    expect(groups).toEqual([PR_GROUP]);
+  });
+});
+
+/**
+ * A closed or merged PR is refused before any work happens. `agent-review` had
+ * no guard at all: labelling a merged PR ran a full agent pass over merged
+ * work, then failed at `gh pr ready` — which cannot convert a merged PR — and
+ * blamed a missing `AGENT_PAT` for it (#102).
+ */
+describe("PR workflows refuse a closed or merged PR", () => {
+  it.each(PR_WORKFLOWS)("%s: reads the PR state from the event", (file) => {
+    const text = fs.readFileSync(file, "utf8");
+
+    expect(text).toContain("PR_STATE: ${{ github.event.pull_request.state }}");
+    expect(text).toContain("PR_MERGED: ${{ github.event.pull_request.merged }}");
+  });
+
+  it.each(PR_WORKFLOWS)("%s: the guard is the first step and is itself ungated", (file) => {
+    const first = stepsOf(file)[0];
+
+    expect(first?.id).toBe("state");
+    expect(first?.if).toBeUndefined();
+    expect(first?.run ?? "").toContain('"$PR_STATE" != "open"');
+    expect(first?.run ?? "").toContain('"$PR_MERGED" = "true"');
+  });
+
+  /**
+   * The two things a refused run must not have done: checked the branch out,
+   * and told the PR an agent is working on it. Both are asserted on the step
+   * that does them rather than on step order, so moving a step cannot quietly
+   * escape the guard.
+   */
+  const PROCEED = "steps.state.outputs.proceed == 'true'";
+
+  it.each(PR_WORKFLOWS)("%s: checkout is gated on the guard", (file) => {
+    const checkout = stepsOf(file).filter((s) => (s.uses ?? "").startsWith("actions/checkout@"));
+
+    expect(checkout).not.toHaveLength(0);
+    for (const step of checkout) expect(step.if ?? "").toContain(PROCEED);
+  });
+
+  it.each(PR_WORKFLOWS)("%s: the run never enters agent:in-progress", (file) => {
+    const labelling = stepsOf(file).filter((s) => (s.run ?? "").includes('--add-label "agent:in-progress"'));
+
+    expect(labelling).not.toHaveLength(0);
+    for (const step of labelling) expect(step.if ?? "").toContain(PROCEED);
+  });
+});
+
+/**
+ * The issue-side equivalent (#102). `agent-implement`'s preflight only listed
+ * *open* PRs, so a merged-and-closed issue that got relabelled checked out
+ * `main`, found the work already there, and died at "no commits were made" —
+ * or, worse, invented a spurious change and opened a duplicate PR.
+ */
+describe("agent-implement refuses a closed issue", () => {
+  const FILE = path.join(WORKFLOW_DIR, "agent-implement.yml");
+
+  it("reads the issue state from the event", () => {
+    expect(fs.readFileSync(FILE, "utf8")).toContain(
+      "ISSUE_STATE: ${{ github.event.issue.state }}",
+    );
+  });
+
+  it("refuses before the existing-PR query, with its own message", () => {
+    const preflight = stepsOf(FILE)[0];
+    const run = preflight?.run ?? "";
+
+    expect(preflight?.id).toBe("preflight");
+    expect(run).toContain('"$ISSUE_STATE" != "open"');
+    expect(run).toContain("this issue is not open");
+    // Distinct from the refusal that was already there — two refusals reading
+    // the same is two states a human cannot tell apart from the comment alone.
+    expect(run).toContain("already targets this issue");
+    expect(run.indexOf("$ISSUE_STATE")).toBeLessThan(run.indexOf("gh pr list"));
+  });
+
+  it("checks nothing out when it refuses", () => {
+    const checkout = stepsOf(FILE).filter((s) => (s.uses ?? "").startsWith("actions/checkout@"));
+
+    expect(checkout).not.toHaveLength(0);
+    for (const step of checkout) {
+      expect(step.if ?? "").toContain("steps.preflight.outputs.refused == 'false'");
+    }
   });
 });

@@ -23,15 +23,29 @@ jobs:
     env:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_TITLE: ${{ github.event.issue.title }}
+      ISSUE_STATE: ${{ github.event.issue.state }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
 
     steps:
-      # Refuse rather than race if a PR already targets this issue.
-      - name: Preflight existing PR
+      # Two refusals, in order. The state check has to come first: the PR query
+      # below lists open PRs only, so an issue whose PR has already merged looks
+      # exactly like an issue nobody has started. It then checks out `main`,
+      # finds the work already there, and usually dies at "no commits were
+      # made" — or, worse, invents a change and opens a duplicate PR (#102).
+      #
+      # Distinct messages on purpose: "someone is already on this" and "this is
+      # finished" call for different things from the human reading them.
+      - name: Preflight
         id: preflight
         run: |
           set -euo pipefail
+          if [ "$ISSUE_STATE" != "open" ]; then
+            echo "refused=true" >> "$GITHUB_OUTPUT"
+            gh issue edit "$ISSUE_NUMBER" --remove-label "agent:implement" || true
+            gh issue comment "$ISSUE_NUMBER" --body "Refused to run: this issue is not open. Reopen it first, then re-add \`agent:implement\`."
+            exit 0
+          fi
           existing=$(gh pr list --state open --json number,url,body \
             --jq "[.[] | select(.body | test(\"(?i)(closes|fixes|resolves)\\\\s+#${ISSUE_NUMBER}\\\\b\"))] | .[0].url // empty")
           if [ -n "$existing" ]; then
