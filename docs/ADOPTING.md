@@ -123,7 +123,7 @@ without erroring.
 gh label create "agent:implement"   --color 0E8A16 --description "Ready for the implement workflow to run"
 gh label create "agent:review"      --color 1D76DB --description "PR is ready for the automated review workflow"
 gh label create "agent:fix"         --color 1D76DB --description "Address review feedback on this PR"
-gh label create "agent:update-branch" --color 5319E7 --description "Refresh this PR branch from main"
+gh label create "agent:update-branch" --color 5319E7 --description "Refresh this PR branch from its base branch"
 gh label create "agent:in-progress" --color FBCA04 --description "An agent run is currently active"
 gh label create "agent:blocked"     --color B60205 --description "A run failed or was refused; needs human attention"
 ```

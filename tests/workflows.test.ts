@@ -21,6 +21,14 @@ import { describe, expect, it } from "vitest";
 
 const WORKFLOW_DIR = ".github/workflows";
 
+/**
+ * The three PR workflows that act on a PR's branch. Every one of them has to
+ * work against the PR's *real* base, not a hardcoded `main` (#71, #100).
+ */
+const PR_WORKFLOWS = ["agent-review.yml", "agent-fix.yml", "agent-update-branch.yml"].map((f) =>
+  path.join(WORKFLOW_DIR, f),
+);
+
 const workflowFiles = fs
   .readdirSync(WORKFLOW_DIR)
   .filter((f) => f.endsWith(".yml") || f.endsWith(".yaml"))
@@ -96,5 +104,50 @@ describe("workflow files", () => {
       .map(({ line, n }) => `${file}:${n} ${line.trim()}`);
 
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * A hardcoded `main` in a PR workflow is the #71/#100 failure class: on a PR
+ * stacked on another branch every git operation silently addresses the wrong
+ * branch — no error, wrong result. `agent-review.yml` and `agent-fix.yml` were
+ * fixed in #71 and `agent-update-branch.yml` in #100; these keep all three
+ * fixed, since nothing else here reads a workflow file.
+ */
+describe("PR workflows work against the PR's base ref", () => {
+  it.each(PR_WORKFLOWS)("%s: declares BASE_REF in the job env", (file) => {
+    expect(fs.readFileSync(file, "utf8")).toContain(
+      "BASE_REF: ${{ github.event.pull_request.base.ref }}",
+    );
+  });
+
+  /**
+   * Only `run:` blocks — a YAML comment may say `origin/main` while explaining
+   * the fallback, and `${BASE_REF:-main}` is the fallback itself, not a
+   * hardcode.
+   */
+  it.each(PR_WORKFLOWS)("%s: no git operation names a literal main ref", (file) => {
+    const lines = fs.readFileSync(file, "utf8").split("\n");
+    const inRun = runBlockLines(lines);
+
+    const offenders = lines
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line, n }) => inRun.has(n) && !/^\s*#/.test(line))
+      .filter(({ line }) => /\borigin\/main\b|\brefs\/heads\/main\b/.test(line))
+      .map(({ line, n }) => `${file}:${n} ${line.trim()}`);
+
+    expect(offenders).toEqual([]);
+  });
+
+  /**
+   * The prompt tells the agent which merge it is cleaning up after. Naming
+   * `main` there on a stacked PR sends it reading the wrong branch's history to
+   * reconcile a conflict that came from somewhere else.
+   */
+  it("update-branch/prompt.md names the base ref rather than main", () => {
+    const prompt = fs.readFileSync(".sandcastle/agent-workflows/update-branch/prompt.md", "utf8");
+
+    expect(prompt).toContain("{{BASE_REF}}");
+    expect(prompt).not.toMatch(/\borigin\/main\b|`main`/);
   });
 });

@@ -1,6 +1,6 @@
 name: Agent Update Branch
 
-# Refresh a stale PR branch from `main`.
+# Refresh a stale PR branch from the branch it is based on.
 #
 # Why this exists, concretely: `pull_request_target` takes the workflow YAML
 # from the base branch but checks out the PR *head*, so a PR opened before a
@@ -35,6 +35,10 @@ jobs:
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       BRANCH: ${{ github.event.pull_request.head.ref }}
+      # The PR's real base branch — the branch this job merges in. A hardcoded
+      # `main` merges an unrelated branch into any PR stacked on another one
+      # (#71 fixed review and fix; #100 fixed this, the site they missed).
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
       BRANCH_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       PR_STATE: ${{ github.event.pull_request.state }}
       PR_MERGED: ${{ github.event.pull_request.merged }}
@@ -69,24 +73,47 @@ jobs:
           token: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
 
       # The whole job in the common case. Only a conflicted merge goes further.
+      #
+      # Shell-safe despite ref names being able to contain `$()`, backticks, `;`,
+      # `|` and `&` — see the long note on the fetch step in agent-review.yml.
+      # Short version: BASE_REF arrives as an `env:` var rather than a workflow
+      # expression spliced into this script, and a quoted parameter expansion is
+      # not re-scanned for syntax (verified 2026-08-02, #75). So `base` is data
+      # from the moment it is assigned, and every use of it stays quoted.
+      #
+      # This note lives at step level, NOT inside the `run:` block. GitHub
+      # evaluates workflow expressions across the whole run script — shell
+      # comment lines included — so prose about expressions written in there
+      # can silently change meaning, or fail the workflow at startup. See the
+      # matching note in agent-fix.yml and tests/workflows.test.ts.
       - name: Attempt the merge
         if: steps.state.outputs.proceed == 'true'
         id: merge
         run: |
           set -uo pipefail
+          base="${BASE_REF:-main}"
           git config user.name "sandcastle-agent[bot]"
           git config user.email "sandcastle-agent[bot]@users.noreply.github.com"
-          git fetch origin +refs/heads/main:refs/remotes/origin/main
+
+          # Checked, not bare: without `set -e` a failed fetch would leave
+          # `origin/$base` missing, every rev-parse below would print nothing,
+          # and the empty-equals-empty comparison would report "up to date" on a
+          # branch that was never merged. A deleted base branch is a real case
+          # once the base is the PR's own, so refuse instead.
+          if ! git fetch origin "+refs/heads/${base}:refs/remotes/origin/${base}"; then
+            echo "::error::Could not fetch base branch '${base}' from origin."
+            exit 1
+          fi
           git checkout -B "$BRANCH"
 
-          base_sha=$(git rev-parse origin/main)
-          if [ "$(git merge-base HEAD origin/main)" = "$base_sha" ]; then
+          base_sha=$(git rev-parse "origin/${base}")
+          if [ "$(git merge-base HEAD "origin/${base}")" = "$base_sha" ]; then
             echo "status=uptodate" >> "$GITHUB_OUTPUT"
-            echo "Already contains origin/main — nothing to do."
+            echo "Already contains origin/${base} — nothing to do."
             exit 0
           fi
 
-          if git merge origin/main --no-edit; then
+          if git merge "origin/${base}" --no-edit; then
             echo "status=clean" >> "$GITHUB_OUTPUT"
             echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
             echo "Merged cleanly."
@@ -140,16 +167,17 @@ jobs:
           BASE_SHA: ${{ steps.merge.outputs.base_sha }}
         run: |
           set -uo pipefail
+          base="${BASE_REF:-main}"
           case "$STATUS" in
             uptodate)
-              body="\`agent:update-branch\`: already up to date with \`main\` — no merge needed."
+              body="\`agent:update-branch\`: already up to date with \`${base}\` — no merge needed."
               ;;
             clean)
-              body="\`agent:update-branch\`: merged \`main\` (\`${BASE_SHA:0:7}\`) cleanly — no conflicts."
+              body="\`agent:update-branch\`: merged \`${base}\` (\`${BASE_SHA:0:7}\`) cleanly — no conflicts."
               ;;
             conflicts)
               body=$(cat "${RUNNER_TEMP}/update_comment.md" 2>/dev/null \
-                || echo "\`agent:update-branch\`: resolved conflicts merging \`main\`.")
+                || echo "\`agent:update-branch\`: resolved conflicts merging \`${base}\`.")
               ;;
             *)
               body="\`agent:update-branch\`: finished with status \`${STATUS}\`."
