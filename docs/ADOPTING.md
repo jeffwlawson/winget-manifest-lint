@@ -8,7 +8,7 @@ checklist, and it is ordered so the things that fail *silently* come first.
 
 ---
 
-## 1. The four failures that look like something else
+## 1. The five failures that look like something else
 
 Read these before setting anything up. Each cost a run to diagnose, and none of them says what is
 actually wrong.
@@ -48,6 +48,31 @@ never runs.
 `agent-implement` cascades to `agent-review` by adding a label, so without the PAT that cascade is
 dead while looking alive. The workflow emits a `::warning::` when `AGENT_PAT` is unset for exactly
 this reason.
+
+### A label set when the issue is *created* fires no `labeled` event
+
+The one failure here that has nothing to do with `GITHUB_TOKEN`, and the only one a correct PAT does
+not fix.
+
+Every trigger in this loop listens on `types: [labeled]` and gates on `github.event.label.name`.
+Labels passed in the **create** call produce only `issues.opened` — they ride along in that
+payload, but no `labeled` event is emitted and `github.event.label` does not exist on `opened`. The
+label is really on the issue, and the workflow correctly never saw an event.
+
+So **label in a separate call from creation**, always. This bites the moment anything publishes
+issues programmatically — a script, a planning skill, an agent seeding its own backlog — and it
+looks exactly like the `GITHUB_TOKEN` no-op above, so it gets misdiagnosed as a missing PAT.
+
+Recovery on an issue that already carries the label is **remove, then re-add**: adding a label that
+is already present is a no-op and fires nothing.
+
+> **A warning about diagnosing all five.** These share a signature with a GitHub Actions platform
+> incident — label present, no run, no error, nothing in any log. During one such incident a label
+> add was misread here as a *sixth*, structural rule (that a GitHub App's label adds are suppressed
+> like `GITHUB_TOKEN`'s), which would have written off the App-identity path in `parity.md` §9.4.
+> Re-running the same label add hours later dispatched normally. The rules above are documented and
+> **retestable**; an outage is neither. Before concluding a trigger is structurally dead, do it
+> twice.
 
 ---
 
