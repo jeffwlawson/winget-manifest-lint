@@ -1257,6 +1257,16 @@ the two sides were compatible corrections to one sentence, so "preserve both whe
 applied and the goal-alignment tiebreaker was never reached. The gap is still open; it just needs
 genuinely incompatible sides to appear.
 
+**And the tiebreaker is inherited, not local.** Checked on 2026-08-07 against Matt Pocock's
+`resolving-merge-conflicts` skill, added upstream since this loop was written: its policy is ours
+point for point — preserve both intents where possible, fall back to the side matching the merge's
+stated goal, record what was traded, never invent behaviour, always resolve rather than `--abort`,
+read commit messages and linked issues for intent, then verify. So `update-branch/prompt.md` needs
+no revision, and the asymmetry above is a property of the upstream policy rather than a defect
+here. If it ever costs something real, the finding belongs upstream. Ours remains a superset: it
+adds the semantic-versus-textual warning naming `src/rules/index.ts`, the "commit anyway and make
+the failure the first line" rule, and the no-push/no-label/no-comment boundary.
+
 ### The fix agents were the best output of the round
 
 Six threads across the two PRs, all addressed, all resolved, no declines — and none of the six was
