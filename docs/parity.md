@@ -283,7 +283,21 @@ expensive to rediscover.
   harmless to run alongside a push, and so `agent:fix` could push while `agent:review` was diffing
   the same branch. The review that comes out of that describes a tree state that never existed —
   plausible, confident, and about nothing. There is no case where concurrent review + mutate on
-  one PR is wanted, and the cost of serialising is a review that waits.
+  one PR is wanted.
+
+  **The group displaces one race rather than closing it, and review has to refuse the remainder.**
+  A first draft of this said "the cost of serialising is a review that waits", which is the one cost
+  it does not have. Review pins everything to the head SHA in its `labeled` payload — the checkout,
+  and `commit_id` on the posted review — and that payload is snapshotted at *label* time while the
+  group decides *start* time. So: a fix is running, a human labels `agent:review`, the run snapshots
+  A and waits, the fix pushes B and frees the group, and review then reads A cleanly and reviews it.
+  Reading-during-a-write became reading-after-one: no torn tree, but every inline comment lands on
+  an ancestor commit and GitHub renders it outdated. The mutates already catch their version of this
+  at push time — `--force-with-lease` pinned to the same payload SHA — so review, which publishes
+  rather than fails, is the only one that needed a check, and it makes it in its own preflight
+  (#105). It refuses rather than re-targeting the live tip: a review is a statement about the commit
+  a human pointed at, re-pointing it would drag `commit_id` and the CI wait to a SHA nobody
+  labelled, and re-adding the label is one action.
 
   **What `cancel-in-progress: false` actually buys**, since it is not a queue and the difference
   bites: GitHub holds **at most two runs per group — one running, one waiting** — and the waiting
@@ -310,7 +324,8 @@ expensive to rediscover.
   in full, then fail at `gh pr ready` under a warning blaming a missing `AGENT_PAT`, which is a
   wrong diagnosis of a real problem. Each refusal says which state it refused; two refusals that
   read alike are two states a human cannot tell apart from the comment. `tests/workflows.test.ts`
-  holds all four workflows to the shape.
+  holds all four workflows to all three properties — guard first, guard ungated, no
+  `agent:in-progress` on a refused run.
 
   One difference is not yet reconciled: review adds `agent:blocked` when it refuses (#102 asked for
   it), while fix, update-branch and implement leave only a comment. That is a difference in what a

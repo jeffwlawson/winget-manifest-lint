@@ -59,17 +59,52 @@ jobs:
       # Unlike the other two this also adds `agent:blocked`. A refusal here is a
       # run a human asked for and did not get, and the review pipeline already
       # uses that label for exactly that; the comment alone scrolls away.
-      - name: Pre-flight — refuse if the PR is closed or merged
+      #
+      # The second refusal is the one the shared concurrency group makes
+      # necessary. Everything this job reads is pinned to the head SHA in the
+      # `labeled` payload — the checkout below, and `commit_id` on the posted
+      # review, which is `git rev-parse HEAD` of that checkout. The payload is
+      # snapshotted at label time, and joining `agent-pr-*` means the run can
+      # start long after: label `agent:review` while a fix is running and the
+      # review starts once the fix has pushed, still pinned to the pre-fix
+      # commit. Serialising did not remove the race, it turned reading-during-a-
+      # write into reading-after-one — a clean review of a superseded tree,
+      # every inline comment on an ancestor commit and rendered outdated. The
+      # mutates catch their version of this at push time
+      # (`--force-with-lease` on the same payload SHA); review publishes
+      # instead of failing, so it has to check before it starts.
+      #
+      # Refuse rather than re-target the current tip: a review is a statement
+      # about the commit a human pointed at, and re-pointing it at whatever
+      # arrived since would also need the CI wait and `commit_id` moved to the
+      # new SHA. Re-adding the label after the mutate finishes is one action and
+      # reviews the right thing. An unreadable `gh pr view` proceeds rather than
+      # refuses — an API blip is not evidence the branch moved.
+      - name: Pre-flight — refuse if the PR is closed, merged, or has moved
         id: state
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [ "$PR_STATE" != "open" ] || [ "$PR_MERGED" = "true" ]; then
+          set -uo pipefail
+          refuse() {
             gh pr edit "$PR_NUMBER" --remove-label "agent:review" || true
             gh pr edit "$PR_NUMBER" --add-label "agent:blocked" || true
-            gh pr comment "$PR_NUMBER" --body "Refused to run \`agent:review\`: this PR is not open."
+            gh pr comment "$PR_NUMBER" --body "$1"
             echo "proceed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          }
+
+          if [ "$PR_STATE" != "open" ] || [ "$PR_MERGED" = "true" ]; then
+            refuse "Refused to run \`agent:review\`: this PR is not open."
+            exit 0
           fi
+
+          current=$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid 2>/dev/null || echo "")
+          if [ -n "$current" ] && [ "$current" != "$HEAD_SHA" ]; then
+            refuse "Refused to run \`agent:review\`: the branch moved while this run was queued — the label was added at \`${HEAD_SHA:0:7}\`, the head is now \`${current:0:7}\`. Reviewing the labelled commit would put every comment on an ancestor and render it outdated. Re-add \`agent:review\` to review the current head."
+            exit 0
+          fi
+
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
 
       - name: Transition labels
         if: steps.state.outputs.proceed == 'true'
@@ -183,10 +218,18 @@ jobs:
 
           # Tail the failing steps so the agent sees *what* failed, not merely
           # that something did. Capped so a noisy failure cannot swamp the prompt.
+          #
+          # Excluded on the same grounds as AGENT_CHECKS above, and it has to be
+          # the same set: a failed `Agent Fix` says nothing about this diff, and
+          # its 60 lines crowd out the CI failure that does. Different namespace
+          # though — these are workflow *run* names, where the agent workflows
+          # are `Agent Review`/`Agent Fix`/`Agent Update Branch`/`Agent
+          # Implement` and the repo's own are `CI` and `Corpus`, so the prefix
+          # is the whole test.
           for rid in $(gh api "repos/${GH_REPO}/actions/runs?head_sha=${HEAD_SHA}&per_page=50" \
                         --jq '.workflow_runs[] | select(.conclusion == "failure") | .id' 2>/dev/null); do
             rname=$(gh api "repos/${GH_REPO}/actions/runs/${rid}" --jq .name 2>/dev/null || echo "run ${rid}")
-            [ "$rname" = "Agent Review" ] && continue
+            case "$rname" in "Agent "*) continue ;; esac
             {
               echo
               echo "### Failure output — ${rname}"

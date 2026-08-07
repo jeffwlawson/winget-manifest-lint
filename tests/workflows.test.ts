@@ -84,6 +84,16 @@ const jobOf = (file: string): Job => {
 
 const stepsOf = (file: string): readonly Step[] => jobOf(file).steps ?? [];
 
+const REVIEW = path.join(WORKFLOW_DIR, "agent-review.yml");
+
+/** `agent-review`'s CI-collection step, which several checks below pick apart. */
+const waitStep = (): Step => {
+  const step = stepsOf(REVIEW).find((s) => (s.name ?? "").startsWith("Wait for other checks"));
+
+  expect(step).toBeDefined();
+  return step as Step;
+};
+
 /**
  * Line numbers (1-based) GitHub hands to the shell: the body of a `run:` block
  * scalar, and a single-line `run: <command>`. The inline form matters —
@@ -269,11 +279,6 @@ describe("every PR workflow shares one concurrency group per PR", () => {
   });
 
   /**
-   * A group declared at workflow level too would put the same job in two
-   * groups, which GitHub rejects; a second job-level one would mean a second
-   * job, which `jobOf` already refuses.
-   */
-  /**
    * Sharing a group turns review's CI wait into a trap: a `fix` labelled
    * mid-review is queued behind it, a queued job is a check run in a
    * non-completed state, and review would spend 15 of its 20 minutes waiting
@@ -281,17 +286,40 @@ describe("every PR workflow shares one concurrency group per PR", () => {
    * from the wait, not just review's own.
    */
   it("agent-review waits on no agent job", () => {
-    const wait = stepsOf(path.join(WORKFLOW_DIR, "agent-review.yml")).find((s) =>
-      (s.name ?? "").startsWith("Wait for other checks"),
-    );
-    const excluded = wait?.env?.["AGENT_CHECKS"] ?? "";
+    const excluded = waitStep().env?.["AGENT_CHECKS"] ?? "";
 
     for (const job of ["review", "fix", "update-branch", "implement"]) {
       expect(excluded).toContain(job);
     }
-    expect(wait?.run ?? "").toContain("AGENT_CHECKS");
+    // Both jq filters — the one that decides whether to keep waiting and the
+    // one that writes the list into the prompt. A pattern only the second used
+    // would still deadlock on a queued agent job.
+    const filters = [...(waitStep().run ?? "").matchAll(/test\(\\"\$\{AGENT_CHECKS\}\\"\)/g)];
+
+    expect(filters).toHaveLength(2);
   });
 
+  /**
+   * The same set, one step further on: the failure-log tail skipped only
+   * `Agent Review` while the wait above excluded all four, so a failed `Agent
+   * Fix` still got 60 lines of its log into the prompt — not evidence about the
+   * diff, and crowding out the CI failure that is. Matched on the workflow
+   * *run* name, a different namespace from the check names in `AGENT_CHECKS`:
+   * every agent workflow is `name: Agent …` and the repo's own are `CI` and
+   * `Corpus`, so the prefix is the whole test.
+   */
+  it("agent-review tails no agent workflow's failure log", () => {
+    const run = waitStep().run ?? "";
+
+    expect(run).toContain('case "$rname" in "Agent "*)');
+    expect(run).not.toContain('[ "$rname" = "Agent Review" ]');
+  });
+
+  /**
+   * A group declared at workflow level too would put the same job in two
+   * groups, which GitHub rejects; a second job-level one would mean a second
+   * job, which `jobOf` already refuses.
+   */
   it.each(PR_WORKFLOWS)("%s: declares exactly one group", (file) => {
     const groups = [...fs.readFileSync(file, "utf8").matchAll(/^\s*group:\s*(.+)$/gm)].map((m) =>
       (m[1] ?? "").trim(),
@@ -348,6 +376,39 @@ describe("PR workflows refuse a closed or merged PR", () => {
 });
 
 /**
+ * The refusal the shared group made necessary. Review pins everything to the
+ * head SHA in its `labeled` payload — the checkout, and `commit_id` on the
+ * posted review — and that payload is snapshotted at label time, so a review
+ * queued behind a fix starts once the fix has pushed and still reviews the
+ * pre-fix commit. Serialising turned reading-during-a-write into
+ * reading-after-one; it did not remove the race. The mutates catch their
+ * version at push time via `--force-with-lease` on the same SHA, review
+ * publishes instead of failing, so it has to check up front.
+ */
+describe("agent-review refuses a head that moved while it was queued", () => {
+  it("compares the payload SHA against the live head, in the guard", () => {
+    const guard = stepsOf(REVIEW)[0];
+    const run = guard?.run ?? "";
+
+    expect(guard?.env?.["HEAD_SHA"]).toBe("${{ github.event.pull_request.head.sha }}");
+    expect(run).toContain("--json headRefOid");
+    expect(run).toContain('"$current" != "$HEAD_SHA"');
+    // Distinct from the not-open refusal: same step, two states, and a human
+    // reading only the comment has to be able to tell them apart.
+    expect(run).toContain("this PR is not open");
+    expect(run).toContain("moved while this run was queued");
+  });
+
+  /**
+   * An unreadable `gh pr view` must not refuse — an API blip is not evidence
+   * the branch moved — so the comparison is guarded on a non-empty answer.
+   */
+  it("proceeds when the live head cannot be read", () => {
+    expect(stepsOf(REVIEW)[0]?.run ?? "").toContain('[ -n "$current" ]');
+  });
+});
+
+/**
  * The issue-side equivalent (#102). `agent-implement`'s preflight only listed
  * *open* PRs, so a merged-and-closed issue that got relabelled checked out
  * `main`, found the work already there, and died at "no commits were made" —
@@ -367,6 +428,9 @@ describe("agent-implement refuses a closed issue", () => {
     const run = preflight?.run ?? "";
 
     expect(preflight?.id).toBe("preflight");
+    // Ungated, like the three PR guards: a guard with an `if:` is a guard that
+    // can be skipped into the work it exists to prevent.
+    expect(preflight?.if).toBeUndefined();
     expect(run).toContain('"$ISSUE_STATE" != "open"');
     expect(run).toContain("this issue is not open");
     // Distinct from the refusal that was already there — two refusals reading
@@ -375,12 +439,21 @@ describe("agent-implement refuses a closed issue", () => {
     expect(run.indexOf("$ISSUE_STATE")).toBeLessThan(run.indexOf("gh pr list"));
   });
 
+  const NOT_REFUSED = "steps.preflight.outputs.refused == 'false'";
+
   it("checks nothing out when it refuses", () => {
     const checkout = stepsOf(FILE).filter((s) => (s.uses ?? "").startsWith("actions/checkout@"));
 
     expect(checkout).not.toHaveLength(0);
-    for (const step of checkout) {
-      expect(step.if ?? "").toContain("steps.preflight.outputs.refused == 'false'");
-    }
+    for (const step of checkout) expect(step.if ?? "").toContain(NOT_REFUSED);
+  });
+
+  it("never enters agent:in-progress when it refuses", () => {
+    const labelling = stepsOf(FILE).filter((s) =>
+      (s.run ?? "").includes('--add-label "agent:in-progress"'),
+    );
+
+    expect(labelling).not.toHaveLength(0);
+    for (const step of labelling) expect(step.if ?? "").toContain(NOT_REFUSED);
   });
 });
