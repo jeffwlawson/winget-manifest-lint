@@ -123,7 +123,7 @@ without erroring.
 gh label create "agent:implement"   --color 0E8A16 --description "Ready for the implement workflow to run"
 gh label create "agent:review"      --color 1D76DB --description "PR is ready for the automated review workflow"
 gh label create "agent:fix"         --color 1D76DB --description "Address review feedback on this PR"
-gh label create "agent:update-branch" --color 5319E7 --description "Refresh this PR branch from main"
+gh label create "agent:update-branch" --color 5319E7 --description "Refresh this PR branch from its base branch"
 gh label create "agent:in-progress" --color FBCA04 --description "An agent run is currently active"
 gh label create "agent:blocked"     --color B60205 --description "A run failed or was refused; needs human attention"
 ```
@@ -167,13 +167,13 @@ The workflows are not yet parameterised. These are the couplings to edit by hand
 
 | Assumption | Where | Notes |
 |---|---|---|
-| Default branch is `main` | ~11 sites across all four workflows, plus `shared/pr-feedback.ts` | if yours is `master`/`develop`, every diff and base is wrong |
+| Default branch is `main` | `agent-implement.yml` (×3), `implement/prompt.md`, `implement/implement.ts`, `ci.yml`; plus the `main` defaults in `shared/pr-feedback.ts` and `update-branch/update-branch.ts` (`implement/implement.ts`'s `git rev-list --count main..HEAD` is the only unconditional `main` in a runner rather than in YAML, and the only site here that *hard-errors* — `sh` is `execSync`, so a missing `main` ref aborts the run) | `implement` branches from `main` and opens its PR against it, unconditionally — that is the one that is wrong on a `master`/`develop` repo. `review`, `fix` and `update-branch` take the base from the PR event (#71, #100), so their `main` is a fallback that never fires on a real PR; change it anyway, or an absent `base.ref` degrades to the wrong branch |
 | `npm ci`, `npm run verify`, `.nvmrc` | four workflows, and `implement` / `fix` / `update-branch` prompts | the whole toolchain assumption; a non-Node repo replaces all of it |
 | `CONTEXT.md` and `CLAUDE.md` exist | every prompt reads them first | see §6 |
 | Project domain | `implement/prompt.md` has an "IF THIS ISSUE ADDS A RULE" section; it and `review/prompt.md` cite this repo's domain model (role vs. `ManifestType`, the rule classes); `fix/prompt.md` and `update-branch/prompt.md` cite `src/rules/index.ts` | roughly half of `implement/prompt.md` is this repo's domain. The extraction prompts and the rest of `review/prompt.md` are already domain-neutral |
 
-Nothing above will error — it will produce agents confidently doing the wrong project's
-conventions. Budget real time for the prompts specifically.
+With the one exception called out above, nothing here will error — it will produce agents
+confidently doing the wrong project's conventions. Budget real time for the prompts specifically.
 
 ---
 
@@ -236,6 +236,14 @@ access. Copy these controls with the workflows — they are not decoration.
 | **Trust your own bot by login** — `github-actions[bot]` **and** `github-actions` | REST and GraphQL spell the same account differently. List one and the review→fix handoff silently drops its own agent's comments |
 | **Scrub the GitHub token** from the agent's environment after fetching context | the agent runs unsandboxed; it has no legitimate `gh` use once context is read |
 | **`contents: read`** on review | the one agent structurally unable to mutate the branch |
+
+**The trigger is weaker than the trust boundary.** Every control above gates an *input*; the
+**trigger** is a label, and GitHub's **Triage** role can add labels with no push access at all. So a
+triage-role collaborator can add `agent:fix` and cause an agent to push code — below the write
+boundary the rest of the design assumes. Moot while you are the only collaborator, and a real
+escalation path the day that changes. Two ways out, and it is a decision rather than a defect: check
+`github.event.sender`'s permission level in the job-level `if:`, or treat "never grant Triage on a
+repo running this loop" as part of the setup. Pick one before you add a collaborator (#102).
 
 The residual you cannot cheaply close: the agent runs unsandboxed with a model token readable in its
 environment and unrestricted network egress. Every *injection source* is behind the write boundary,

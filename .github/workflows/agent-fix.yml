@@ -25,9 +25,14 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Shared with agent-review.yml: both act on the same PR branch.
+    # One group per PR, shared with agent-update-branch.yml (which pushes this
+    # same branch) and agent-review.yml (which reads it). Review was outside the
+    # group until #102 on the grounds that `contents: read` makes it harmless —
+    # but the race was never review writing, it was review *reading* mid-push,
+    # so a review could describe a tree that never existed. Nothing wants
+    # review and a mutate to overlap on one PR.
     concurrency:
-      group: agent-mutate-pr-${{ github.event.pull_request.number }}
+      group: agent-pr-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     permissions:
       contents: write
