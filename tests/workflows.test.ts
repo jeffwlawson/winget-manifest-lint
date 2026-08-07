@@ -457,3 +457,115 @@ describe("agent-implement refuses a closed issue", () => {
     for (const step of labelling) expect(step.if ?? "").toContain(NOT_REFUSED);
   });
 });
+
+/**
+ * Issue *shape* (#90). An issue's position in a hierarchy decides whether it can
+ * be implemented at all, and the workflow used to accept anything carrying the
+ * label:
+ *
+ * - **has a parent** — a sub-issue implemented alone loses the ordering and the
+ *   shared context its parent holds; the parent drives it or nobody does.
+ * - **has sub-issues** — PRD-shaped, and the path that works sub-issues in
+ *   sequence does not exist yet (#92).
+ * - **`wayfinder:*`** — maps and decision tickets are planning artifacts. They
+ *   describe work; they are not work.
+ *
+ * All three are refused in the preflight step, which is what keeps them job-…
+ * rather than agent-level: no checkout, no `npm ci`, no `agent:in-progress`.
+ */
+describe("agent-implement refuses issue shapes it cannot handle", () => {
+  const FILE = path.join(WORKFLOW_DIR, "agent-implement.yml");
+  const preflightRun = (): string => stepsOf(FILE)[0]?.run ?? "";
+
+  /**
+   * One query, not three. Parent and sub-issue count come back together —
+   * asking twice is two chances to see a different answer, and the shape is
+   * what every refusal below branches on.
+   */
+  it("computes the shape once, from a single API call", () => {
+    const run = preflightRun();
+
+    expect([...run.matchAll(/gh api graphql/g)]).toHaveLength(1);
+    expect(run).toContain("parent {");
+    expect(run).toContain("subIssues(");
+  });
+
+  it("exposes the shape as a step output", () => {
+    expect(preflightRun()).toContain('echo "shape=$shape" >> "$GITHUB_OUTPUT"');
+  });
+
+  /**
+   * Three refusals, three messages. A human reading only the comment has to be
+   * able to tell which of the three shapes they hit — the remedy differs for
+   * each, and "refused" alone sends them to the run log.
+   */
+  it.each([
+    ["a sub-issue", "sub-issue of"],
+    ["a PRD-shaped parent", "sub-issue(s)"],
+    ["a wayfinder ticket", "planning artifact"],
+  ])("refuses %s with its own message", (_shape: string, phrase: string) => {
+    expect(preflightRun()).toContain(phrase);
+  });
+
+  /**
+   * The PRD refusal has to say the path is *pending*, not that the issue is
+   * wrong. It is the one shape that becomes implementable later (#92) without
+   * anyone editing the issue.
+   */
+  it("names the PRD path as pending rather than rejecting the issue", () => {
+    expect(preflightRun()).toMatch(/PRD path[^\n]*not built yet/);
+  });
+
+  /**
+   * Unlike the state and existing-PR refusals — "reopen it", "close that PR" —
+   * a shape refusal is durable: nothing about the run will differ next time.
+   * `agent:blocked` is what records that on the issue.
+   */
+  it("marks a shape refusal blocked, in the preflight step itself", () => {
+    const run = preflightRun();
+
+    expect(run).toContain('--add-label "agent:blocked"');
+    expect(run).toContain('--remove-label "agent:implement"');
+  });
+
+  /**
+   * An unreadable shape must not be read as "standalone". Every other guard in
+   * these workflows proceeds when an API call comes back empty; this one is the
+   * exception, because guessing wrong here *is* the isolation bug. Failing the
+   * step leaves the trigger label in place and the run visibly red.
+   */
+  it("does not swallow a failed shape query", () => {
+    const shapeQuery = preflightRun()
+      .split("\n")
+      .filter((l) => l.includes("gh api graphql") || l.includes("gh pr list"));
+
+    for (const line of shapeQuery) expect(line).not.toContain("|| true");
+  });
+
+  const NOT_REFUSED = "steps.preflight.outputs.refused == 'false'";
+
+  /**
+   * The job-level `if:` saves a runner for the wrong *label*; this saves the
+   * expensive half of the run for the wrong *issue*. `agent-implement.yml:9-12`
+   * records why that distinction is worth keeping.
+   */
+  it("installs nothing when it refuses", () => {
+    const install = stepsOf(FILE).filter(
+      (s) => (s.run ?? "").includes("npm ci") || (s.uses ?? "").startsWith("actions/setup-node@"),
+    );
+
+    expect(install).not.toHaveLength(0);
+    for (const step of install) expect(step.if ?? "").toContain(NOT_REFUSED);
+  });
+
+  /**
+   * Shape is settled before the existing-PR query. An issue that must never be
+   * implemented should not be told "close that PR, then re-add the label" — a
+   * remedy that leads straight back to a refusal.
+   */
+  it("settles the shape before the existing-PR query", () => {
+    const run = preflightRun();
+
+    expect(run.indexOf("gh api graphql")).toBeLessThan(run.indexOf("gh pr list"));
+  });
+});
