@@ -81,7 +81,8 @@ jobs:
       # The whole job in the common case. Only a conflicted merge goes further.
       #
       # Shell-safe despite ref names being able to contain `$()`, backticks, `;`,
-      # `|` and `&` — see the long note on the fetch step in agent-review.yml.
+      # `|` and `&` — see the long note on the fetch step in
+      # agent-review-reusable.yml.
       # Short version: BASE_REF arrives as an `env:` var rather than a workflow
       # expression spliced into this script, and a quoted parameter expansion is
       # not re-scanned for syntax (verified 2026-08-02, #75). So `base` is data

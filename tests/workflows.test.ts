@@ -16,8 +16,8 @@ import { parse } from "yaml";
  * The rule being encoded: **GitHub evaluates `${{ … }}` everywhere except YAML
  * comments** — including inside a `run:` block, where a `#` line is a comment
  * to bash but still an expression host to GitHub. That is the whole distinction
- * between the harmless note in `agent-review.yml` and the fatal one that was in
- * `agent-fix.yml`.
+ * between the harmless note in `agent-review-reusable.yml` and the fatal one that
+ * was in `agent-fix.yml`.
  */
 
 const WORKFLOW_DIR = ".github/workflows";
@@ -25,9 +25,15 @@ const WORKFLOW_DIR = ".github/workflows";
 /**
  * The three PR workflows that act on a PR's branch. Every one of them has to
  * work against the PR's *real* base, not a hardcoded `main` (#71, #100).
+ *
+ * Review is named by its **reusable** half (#97): the guards, the env and every
+ * step moved there, and its caller is a trigger and two wires. A check aimed at
+ * the caller would pass by reading a file that no longer contains the thing it
+ * is checking — which is the coverage failure this whole file exists to catch,
+ * one level up.
  */
-const PR_WORKFLOWS = ["agent-review.yml", "agent-fix.yml", "agent-update-branch.yml"].map((f) =>
-  path.join(WORKFLOW_DIR, f),
+const PR_WORKFLOWS = ["agent-review-reusable.yml", "agent-fix.yml", "agent-update-branch.yml"].map(
+  (f) => path.join(WORKFLOW_DIR, f),
 );
 
 const workflowFiles = fs
@@ -93,12 +99,40 @@ interface Step {
   readonly uses?: string;
   readonly run?: string;
   readonly env?: Record<string, string>;
+  readonly with?: Record<string, string>;
 }
 
 interface Job {
+  readonly if?: string;
+  readonly permissions?: Record<string, string>;
   readonly concurrency?: { readonly group?: string; readonly "cancel-in-progress"?: boolean };
   readonly steps?: readonly Step[];
+  /** Set on a caller job — the reusable workflow it hands the work to (#97). */
+  readonly uses?: string;
+  readonly with?: Record<string, string>;
+  readonly secrets?: Record<string, string> | "inherit";
 }
+
+interface CallInput {
+  readonly description?: string;
+  readonly type?: string;
+  readonly required?: boolean;
+  readonly default?: string;
+}
+
+interface Workflow {
+  readonly name?: string;
+  readonly on?: {
+    readonly workflow_call?: {
+      readonly inputs?: Record<string, CallInput>;
+      readonly secrets?: Record<string, { readonly required?: boolean }>;
+    };
+    readonly pull_request_target?: { readonly types?: readonly string[] };
+  };
+  readonly jobs: Record<string, Job>;
+}
+
+const workflowOf = (file: string): Workflow => parse(fs.readFileSync(file, "utf8")) as Workflow;
 
 /**
  * The single job each agent workflow declares. Parsed rather than pattern
@@ -106,8 +140,7 @@ interface Job {
  * `if:`, and a regex over the raw text cannot see either.
  */
 const jobOf = (file: string): Job => {
-  const doc = parse(fs.readFileSync(file, "utf8")) as { jobs: Record<string, Job> };
-  const jobs = Object.values(doc.jobs);
+  const jobs = Object.values(workflowOf(file).jobs);
 
   expect(jobs).toHaveLength(1);
   return jobs[0] as Job;
@@ -115,7 +148,23 @@ const jobOf = (file: string): Job => {
 
 const stepsOf = (file: string): readonly Step[] => jobOf(file).steps ?? [];
 
-const REVIEW = path.join(WORKFLOW_DIR, "agent-review.yml");
+/**
+ * Every workflow in the loop, split by which half of a `workflow_call` pair it
+ * is. A **caller** declares the trigger and hands over (`uses:`); a **runner
+ * workflow** is the one carrying the guards, the permissions and the steps.
+ *
+ * Derived from the job rather than from the file name, so a conversion cannot
+ * put a file in the wrong bucket: the thing being asked is "does this file do
+ * the work", and `uses:` is that question answered.
+ */
+const agentWorkflows = workflowFiles.filter((f) => path.basename(f).startsWith("agent-"));
+const callerWorkflows = agentWorkflows.filter((f) => jobOf(f).uses !== undefined);
+const runnerWorkflows = agentWorkflows.filter((f) => jobOf(f).uses === undefined);
+
+/** The review job — the reusable half, where every step now lives (#97). */
+const REVIEW = path.join(WORKFLOW_DIR, "agent-review-reusable.yml");
+/** …and the caller that triggers it. */
+const REVIEW_CALLER = path.join(WORKFLOW_DIR, "agent-review.yml");
 
 /** The two workflows that share the `agent:implement` label (#92). */
 const IMPLEMENT = path.join(WORKFLOW_DIR, "agent-implement.yml");
@@ -275,9 +324,15 @@ describe("workflow files", () => {
  * fixed, since nothing else here reads a workflow file.
  */
 describe("PR workflows work against the PR's base ref", () => {
+  /**
+   * The event field is the source, and a fallback may follow it — review takes
+   * its fallback from a `workflow_call` input rather than from the literal
+   * `main` the other two still carry (#97). What is not allowed is the field
+   * being absent, or being read from anywhere but the event.
+   */
   it.each(PR_WORKFLOWS)("%s: declares BASE_REF in the job env", (file) => {
-    expect(fs.readFileSync(file, "utf8")).toContain(
-      "BASE_REF: ${{ github.event.pull_request.base.ref }}",
+    expect(fs.readFileSync(file, "utf8")).toMatch(
+      /BASE_REF: \$\{\{ github\.event\.pull_request\.base\.ref( \|\| [^}]+?)? \}\}/,
     );
   });
 
@@ -478,6 +533,205 @@ describe("agent-review refuses a head that moved while it was queued", () => {
    */
   it("proceeds when the live head cannot be read", () => {
     expect(stepsOf(REVIEW)[0]?.run ?? "").toContain('[ -n "$current" ]');
+  });
+});
+
+/**
+ * `agent-review` is the first workflow split into a **caller** and a
+ * `workflow_call` half (#97, slice 3 of #88). The loop is the deliverable and
+ * it is installed in other repos, so what an adopter writes has to be the two
+ * wires below and nothing else — every control stays on this side, in a file
+ * they reference rather than copy.
+ *
+ * A reusable workflow rather than a composite action for one reason: an action
+ * cannot declare `on:`, `permissions:`, `concurrency:` or a job-level `if:`,
+ * and **the fork guard is a job-level `if:`**. An action could have absorbed
+ * checkout → node → install and left every control to be copy-pasted per repo,
+ * which is how they drift.
+ *
+ * The checks here are about the seam itself. Everything about what the job
+ * *does* is checked by the describes above, which read the reusable file
+ * because `PR_WORKFLOWS` and `REVIEW` name it — that redirection is the point,
+ * and a check still aimed at the caller would be green over an empty file.
+ */
+describe("agent-review is called rather than copied", () => {
+  const caller = (): Job => jobOf(REVIEW_CALLER);
+  const call = () => workflowOf(REVIEW).on?.workflow_call;
+
+  /**
+   * Whatever a caller hands over to has to be a file this suite reads. The
+   * empty-expression guard is the one that bites: a `${{ }}` in the extracted
+   * YAML rejects the whole file at *startup*, with no log and no failed job —
+   * exactly the two-day failure this suite was written for — and the caller it
+   * was extracted from would still parse clean.
+   */
+  it.each(callerWorkflows)("%s: calls a workflow this suite already checks", (file) => {
+    const target = (jobOf(file).uses ?? "").replace(/^\.\//, "");
+
+    expect(runnerWorkflows).toContain(target);
+    expect(workflowFiles).toContain(target);
+  });
+
+  it("the caller is a trigger and nothing else", () => {
+    const doc = workflowOf(REVIEW_CALLER);
+
+    // Also what keeps the check above honest: `it.each` over an empty list
+    // passes by running nothing.
+    expect(callerWorkflows).toContain(REVIEW_CALLER);
+    expect(doc.on?.pull_request_target?.types).toEqual(["labeled"]);
+    expect(caller().uses).toBe(`./${REVIEW}`);
+    expect(caller().steps).toBeUndefined();
+  });
+
+  /**
+   * The run keeps the caller's name, and that is load-bearing rather than
+   * cosmetic: review's failure-log tail skips workflow runs named `Agent …`
+   * (`case "$rname" in "Agent "*`), and a called workflow contributes no run of
+   * its own — there is one run, named here. Rename this and every agent run's
+   * failure log starts arriving in review's prompt as evidence about the diff.
+   */
+  it("keeps the run name the failure-log filter matches on", () => {
+    expect(workflowOf(REVIEW_CALLER).name).toBe("Agent Review");
+  });
+
+  /**
+   * Both guards live in the **called** job. A caller's `if:` can only skip this
+   * job, never loosen it, so putting the fork guard there would make it
+   * something an adopter can leave behind — and a fork PR reaching the
+   * checkout+install steps runs untrusted code with secrets in scope, which is
+   * the one failure in this file that is not recoverable by re-labelling.
+   */
+  it("guards the fork and the label on this side of the seam", () => {
+    const guard = jobOf(REVIEW).if ?? "";
+
+    expect(guard).toContain(
+      "github.event.pull_request.head.repo.full_name == github.repository",
+    );
+    expect(guard).toContain("github.event.label.name == 'agent:review'");
+  });
+
+  /**
+   * `contents: read` is the invariant that bounds what a wrong review can do
+   * (docs/parity.md §10), and it has to be declared **twice** — for opposite
+   * reasons, which is why this is not the duplication it looks like.
+   *
+   * A called workflow can only *downgrade* the token it is handed. So the
+   * callee's block is the bound: it cannot be widened from the caller. And the
+   * caller's block is the grant: on a repo whose default `GITHUB_TOKEN` is
+   * read-only, `pull-requests: write` declared only in the callee grants
+   * nothing, and every `gh pr edit` in the job 403s — a review that runs, costs
+   * an agent pass, and silently never transitions a label.
+   */
+  it.each([
+    ["the caller grants", REVIEW_CALLER],
+    ["the called job bounds", REVIEW],
+  ])("%s exactly the two permissions the job uses", (_half: string, file: string) => {
+    expect(jobOf(file).permissions).toEqual({ contents: "read", "pull-requests": "write" });
+  });
+
+  /**
+   * Named, not inherited. `secrets: inherit` hands the called workflow every
+   * secret the repository holds, including the ones this loop has no use for —
+   * and it is the form that reads as tidier, so the list is worth pinning.
+   */
+  it("passes both secrets by name", () => {
+    const declared = call()?.secrets ?? {};
+
+    expect(Object.keys(declared).sort()).toEqual(["AGENT_PAT", "CLAUDE_CODE_OAUTH_TOKEN"]);
+    // The agent cannot run without its token; the PAT only marks the PR ready,
+    // and its absence is already a warning the run survives (§1).
+    expect(declared["CLAUDE_CODE_OAUTH_TOKEN"]?.required).toBe(true);
+    expect(declared["AGENT_PAT"]?.required).toBe(false);
+
+    expect(caller().secrets).not.toBe("inherit");
+    expect(Object.keys(caller().secrets ?? {}).sort()).toEqual([
+      "AGENT_PAT",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+    ]);
+  });
+
+  /** Every input is typed and says what it is for — an adopter reads only this. */
+  it.each(["default-branch", "node-version-file", "setup", "self-check"])(
+    "declares the %s input",
+    (name: string) => {
+      const input = call()?.inputs?.[name];
+
+      expect(input?.type).toBe("string");
+      expect(input?.description ?? "").not.toBe("");
+    },
+  );
+
+  /**
+   * The three couplings docs/ADOPTING.md §5 asks an adopter to hand-edit, now
+   * reaching the job as inputs. The defaults are this repo's values, so the
+   * caller passes none of them and the conversion changes nothing here.
+   */
+  it("takes the base-ref fallback from the caller", () => {
+    expect(fs.readFileSync(REVIEW, "utf8")).toContain(
+      "BASE_REF: ${{ github.event.pull_request.base.ref || inputs.default-branch }}",
+    );
+    expect(call()?.inputs?.["default-branch"]?.default).toBe("main");
+  });
+
+  it("takes the Node setup and the dependency install from the caller", () => {
+    const node = stepsOf(REVIEW).find((s) => (s.uses ?? "").startsWith("actions/setup-node@"));
+    const install = stepsOf(REVIEW).find((s) => (s.run ?? "").includes("${{ inputs.setup }}"));
+
+    expect(node?.with?.["node-version-file"]).toBe("${{ inputs.node-version-file }}");
+    expect(install).toBeDefined();
+    // Both skippable, and that is the whole of the non-Node story: a repo with
+    // no `.nvmrc` and no `npm ci` passes empty strings and still gets a review,
+    // on the image's own Node.
+    expect(node?.if ?? "").toContain("inputs.node-version-file != ''");
+    expect(install?.if ?? "").toContain("inputs.setup != ''");
+    expect(call()?.inputs?.["node-version-file"]?.default).toBe(".nvmrc");
+    expect(call()?.inputs?.["setup"]?.default).toBe("npm ci");
+  });
+
+  /**
+   * The CI wait polls every check on the head commit and excludes its own, or
+   * it waits for itself: 15 of this job's 20 minutes, then a review with
+   * degraded evidence — the failure mode #48 exists to prevent, reintroduced by
+   * the extraction.
+   *
+   * The name changes as a *result* of the extraction. A called workflow's job
+   * appears as `<caller job id> / <called job id>`, so the anchored
+   * `AGENT_CHECKS` regex that used to match `review` no longer matches
+   * anything, and nothing inside a called workflow can read its caller's job
+   * id. Hence an input — compared as a literal rather than folded into the
+   * regex, because a job id is not a regex and `.` in one would quietly match
+   * a neighbour.
+   */
+  it("excludes its own check run from the wait, in both filters", () => {
+    const step = waitStep();
+
+    expect(step.env?.["SELF_CHECK"]).toBe("${{ inputs.self-check }}");
+    const filters = [...(step.run ?? "").matchAll(/select\(\.name != env\.SELF_CHECK\)/g)];
+
+    expect(filters).toHaveLength(2);
+  });
+
+  /**
+   * …and the input is required, because the value is a fact about the *caller*
+   * that only the caller knows. A default would be right for a caller that
+   * copied this repo's job id and silently wrong — 15 minutes of waiting, no
+   * error — for one that did not.
+   */
+  it("makes the caller state the check-run name it produces", () => {
+    expect(call()?.inputs?.["self-check"]?.required).toBe(true);
+    expect(call()?.inputs?.["self-check"]?.default).toBeUndefined();
+  });
+
+  /**
+   * The coupling itself: the name is `<caller job id> / <called job id>`, and
+   * both halves are right here to be read. Renaming either job without editing
+   * the input is the deadlock above, and nothing at runtime would say so.
+   */
+  it("passes the name the two job ids actually produce", () => {
+    const [callerJob] = Object.keys(workflowOf(REVIEW_CALLER).jobs);
+    const [calledJob] = Object.keys(workflowOf(REVIEW).jobs);
+
+    expect(caller().with?.["self-check"]).toBe(`${callerJob} / ${calledJob}`);
   });
 });
 
@@ -1092,10 +1346,15 @@ describe("every workflow invokes the runners at a pinned version", () => {
     readonly files?: readonly string[];
   };
 
-  /** `agent-<name>.yml` runs the `<name>` subcommand — derived, not tabulated. */
-  const agentWorkflows = workflowFiles.filter((f) => path.basename(f).startsWith("agent-"));
+  /**
+   * `agent-<name>.yml` runs the `<name>` subcommand — derived, not tabulated,
+   * and `-reusable` is dropped because the two halves of a converted workflow
+   * are one workflow with one runner between them (#97).
+   */
   const subcommandOf = (file: string): string =>
-    path.basename(file, path.extname(file)).replace(/^agent-/, "");
+    path.basename(file, path.extname(file))
+      .replace(/^agent-/, "")
+      .replace(/-reusable$/, "");
 
   const escaped = manifest.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   /**
@@ -1116,8 +1375,14 @@ describe("every workflow invokes the runners at a pinned version", () => {
     return invocations[0] as string;
   };
 
+  /**
+   * One runner workflow per subcommand, still, after a conversion moved one of
+   * them into a second file. A caller has no `npx` line of its own — it is the
+   * file it calls that hands over — so this is the check that says the pin
+   * moved *with* the steps rather than being left behind or lost.
+   */
   it("finds the agent workflows", () => {
-    expect(agentWorkflows.map(subcommandOf).sort()).toEqual([
+    expect(runnerWorkflows.map(subcommandOf).sort()).toEqual([
       "fix",
       "implement",
       "implement-prd",
@@ -1126,7 +1391,7 @@ describe("every workflow invokes the runners at a pinned version", () => {
     ]);
   });
 
-  it.each(agentWorkflows)("%s: runs its own subcommand, at an exact version", (file) => {
+  it.each(runnerWorkflows)("%s: runs its own subcommand, at an exact version", (file) => {
     const match = invocation(file).match(PIN);
 
     expect(match).not.toBeNull();
@@ -1139,7 +1404,7 @@ describe("every workflow invokes the runners at a pinned version", () => {
    * on the old runner, and repinning without publishing takes the whole loop
    * down at `npx`. Both read as "done" to the person who did half of it.
    */
-  it.each(agentWorkflows)("%s: pins the version this repo publishes", (file) => {
+  it.each(runnerWorkflows)("%s: pins the version this repo publishes", (file) => {
     expect(invocation(file).match(PIN)?.[1]).toBe(manifest.version);
   });
 
