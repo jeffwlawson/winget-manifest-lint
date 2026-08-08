@@ -497,9 +497,11 @@ expensive to rediscover.
   of the PRD, and each of those answers is a scheduler nobody asked for. The hazard the rule buys is
   worth naming: dragging a sub-issue in the parent's UI silently rewrites the execution order of a
   chain that has not run yet, with no other visible effect anywhere.
-- **`agent:queued` is written by a human, never by a workflow.** It is the one `agent:*` label with
-  no consumer (§8), and until `promote-queued` exists (§1, §9.6) nothing removes it either — so a
-  workflow applying it would be manufacturing a state only a human can clear. It also does not
+- **`agent:queued` is written by a human, never by a workflow.** It is the one `agent:*` label no
+  workflow touches at all (§8) — `agent:in-progress` and `agent:blocked` have no consumer either,
+  but a workflow applies and clears them — and until `promote-queued` exists (§1, §9.6) nothing
+  removes it either, so a workflow applying it would be manufacturing a state only a human can
+  clear. It also does not
   belong *inside* a PRD: every slice after the first is queued by construction, and a label saying
   so is one more thing that can go stale against an ordering the chain already holds. If
   `promote-queued` ever ships, this becomes "written by a human or by that workflow, on top-level
