@@ -104,13 +104,14 @@ run — accumulating onto a single branch and a single PR, and requesting review
 | Refuses a PRD whose sub-issues have **all closed** | ✅ | ✅ | and *without* `agent:blocked` — a finished PRD is a success state, and the label would be the stale one §10 warns about |
 | Refuses a `wayfinder:*` planning artifact | ❌ | ➕ | the same refusal `agent-implement` carries, for the map that has sub-issues and so reaches this workflow instead |
 | Targets the **first still-open** sub-issue, in sub-issues API order | ✅ | ✅ | see the ordering note below |
-| One branch `agent/prd-<n>-<slug>`, reused across the chain | ✅ | ✅ | |
+| One branch `agent/prd-<n>-<slug>`, reused across the chain | ✅ | ✅ | found on the remote by `agent/prd-<n>-*`, never by the whole recomputed name — the slug comes from the parent's *title* and a title is editable, so a retitle mid-chain would otherwise fork slice N off `main` and open a second PR. Two matches is ambiguous and fails the run rather than guessing |
 | Plain `git push`, never force | ✅ | ✅ | the branch carries every earlier slice; a force push is a chain eating its own history |
 | One PR, opened once and reused | ✅ | ✅ | draft until the last slice |
 | Closes each finished sub-issue with a comment naming the commit SHA | ✅ | ✅ | the only record tying a closed sub-issue to its code while the PR is still growing |
 | Chains by re-labelling the **parent** with `AGENT_PAT` | ✅ | ✅ | warns loudly when the PAT is absent — a `GITHUB_TOKEN` label add is a silent no-op, and here it stops the chain dead while looking like work in progress |
 | Adds `agent:review` to the PR only when no sub-issues remain | ✅ | ✅ | the trade below |
-| `failure_reason.txt` → issue comment, `agent:blocked`, `agent:in-progress` held | ✅ | ✅ | on the **parent**; the failure comment names which sub-issue stopped the chain |
+| Both label adds run under `set -e` | — | ➕ | each step ends with the warn-if-no-PAT `if`, which returns 0 when the PAT *is* set; without `-e` a failed add exits the step green, `failure()` never fires, and the chain halts unlabelled or the PR sits finished in draft |
+| `failure_reason.txt` → issue comment, `agent:blocked`, `agent:in-progress` held | ✅ | ✅ | on the **parent**; the failure comment names which sub-issue stopped the chain, and — when there is one — the PR to hand `agent:review` to if the chain died *after* closing that sub-issue |
 | Agent-authored PR title + body | ✅ | ❌ | same gap as §2, same fixed heredoc |
 
 **Ordering comes from creation order, not from the edges.** The chain walks sub-issues API order
@@ -142,6 +143,16 @@ up with the close, and reading it back as still open is the one wrong answer wit
 chain re-labels, the next run's preflight finds nothing open and refuses "the PRD is finished", and
 `agent:review` is only ever added on the *other* leg. The PR would sit finished, in draft, reviewed
 by nobody.
+
+**The same state is still reachable by failing, so both messages name the way out.** Every step
+after `Close the finished sub-issue` fails with that sub-issue already closed — so on the *last*
+slice, the failure comment's own remedy ("re-apply `agent:implement`") lands on the finished-PRD
+refusal instead of retrying anything, and the run has walked a human into the
+remedy-that-refuses-again trap `agent-implement.yml` warns about. Neither end of that loop can fix
+it alone, so both say the other thing: the failure comment names the PR and asks for `agent:review`
+on it by hand, and the finished-PRD refusal names the still-draft PR on `agent/prd-<n>-*`. The
+alternative — making `agent:review` reachable from a second place — is a second owner of the one
+handoff, which is what §10's residual race is already about.
 
 ### The trade: review is once per PR, not once per slice
 

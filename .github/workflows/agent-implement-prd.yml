@@ -190,8 +190,15 @@ jobs:
           # the order the API returned them, take the head. No sort, no edge
           # read — see the note at the top of this file.
           next=$(jq -c '[.subIssues.nodes[] | select(.state == "OPEN")] | .[0] // empty' <<< "$issue")
+          # The PR clause is load-bearing, not padding. A run that dies after
+          # `Close the finished sub-issue` but before `Request review` leaves
+          # the PRD finished on the tracker and the PR in draft with no
+          # `agent:review` — and re-labelling the parent, which is exactly what
+          # the failure comment asks for, lands here. Naming the other way in
+          # makes this a recovery rather than the remedy-that-refuses-again trap
+          # agent-implement.yml:48-51 warns about.
           if [ -z "$next" ]; then
-            refuse "Refused to run: #${ISSUE_NUMBER} has no open sub-issues left — all ${subs} of them are closed, so the PRD is finished. Nothing was re-labelled; if there is more to do, add a sub-issue first."
+            refuse "Refused to run: #${ISSUE_NUMBER} has no open sub-issues left — all ${subs} of them are closed, so the PRD is finished. Nothing was re-labelled; if there is more to do, add a sub-issue first. If instead a run stopped *after* closing the last sub-issue, its PR — the open one whose branch starts \`agent/prd-${ISSUE_NUMBER}-\` — is still in draft and was never handed over: add \`agent:review\` to that PR by hand. Re-labelling here only returns this message."
           fi
 
           # Heredoc form for the title: an issue title cannot contain a newline
@@ -228,28 +235,59 @@ jobs:
           # with no change to the workflow.
           token: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
 
-      - name: Compute branch name
+      # One branch for the whole PRD, so slice N is written on top of slices
+      # 1..N-1 rather than against a base that does not have them.
+      #
+      # Looked up on the remote by the **stable half** of the name —
+      # `agent/prd-<parent>-` — rather than recomputed whole. The slug half comes
+      # from the parent's title, and a title is editable: recompute it every run
+      # and retitling the PRD mid-chain silently forks the chain, branching slice
+      # N off `main` without slices 1..N-1 and opening a *second* draft PR
+      # carrying the same `Closes #<parent>`. The issue number is the part nobody
+      # can edit, so it is the part the lookup keys on; the slug is only ever
+      # used to *name* a branch that does not exist yet.
+      - name: Resolve the accumulating branch
         if: steps.preflight.outputs.refused == 'false'
         id: branch
         run: |
-          slug=$(echo "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-50)
-          echo "name=agent/prd-${ISSUE_NUMBER}-${slug}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          existing=$(git ls-remote --heads origin "agent/prd-${ISSUE_NUMBER}-*" \
+            | cut -f2 | sed 's#^refs/heads/##')
 
-      # One branch for the whole PRD, so slice N is written on top of slices
-      # 1..N-1 rather than against a base that does not have them. Derived from
-      # the parent's number and title, so every run of the chain computes the
-      # same name without anything having to remember it.
+          if [ -z "$existing" ]; then
+            slug=$(echo "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-50)
+            name="agent/prd-${ISSUE_NUMBER}-${slug}"
+            exists=false
+            echo "No branch for PRD #${ISSUE_NUMBER} yet; will create ${name} from main."
+          elif [ "$(wc -l <<< "$existing")" -gt 1 ]; then
+            # Two branches for one PRD is the fork this lookup exists to prevent,
+            # so it must not be guessed at — picking either one drops whatever
+            # slices are on the other. Fail, and let the blocked comment say so.
+            echo "::error::More than one branch matches agent/prd-${ISSUE_NUMBER}-*, so which one carries this PRD's slices is ambiguous: $(tr '\n' ' ' <<< "$existing"). Delete or rename all but one, then re-add agent:implement."
+            exit 1
+          else
+            name="$existing"
+            exists=true
+            echo "Reusing ${name}."
+          fi
+
+          {
+            echo "name=$name"
+            echo "exists=$exists"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Prepare the accumulating branch
         if: steps.preflight.outputs.refused == 'false'
         id: prepare
         env:
           BRANCH: ${{ steps.branch.outputs.name }}
+          EXISTS: ${{ steps.branch.outputs.exists }}
         run: |
           set -euo pipefail
           git config user.name "sandcastle-agent[bot]"
           git config user.email "sandcastle-agent[bot]@users.noreply.github.com"
 
-          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+          if [ "$EXISTS" = "true" ]; then
             git fetch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
             git checkout -B "$BRANCH" "refs/remotes/origin/${BRANCH}"
             echo "Reusing $BRANCH at $(git rev-parse --short HEAD)."
@@ -394,6 +432,16 @@ jobs:
       # parent looking like work in progress. That is worse than the review
       # cascade's version of the same failure, which at least leaves a finished
       # PR behind — warn accordingly.
+      #
+      # `-e`, unlike the sibling warn-if-no-PAT steps elsewhere in the set. This
+      # step ends with an `if` that returns 0 whenever the PAT *is* present, and
+      # that `if` is the last command — so without `-e` a failed label add exits
+      # the step green, `Mark blocked on failure` never fires (it is gated on
+      # `failure()`), `Transition labels` has already removed `agent:implement`
+      # and the `always()` step clears `agent:in-progress`. The chain would halt
+      # on a green run with the parent carrying no agent label at all: precisely
+      # the outcome the warning above exists to prevent, minus the warning. A
+      # `GITHUB_TOKEN` label add still succeeds, so the PAT path is unaffected.
       - name: Chain the next sub-issue
         if: steps.preflight.outputs.refused == 'false' && success() && steps.remaining.outputs.count != '0'
         env:
@@ -401,7 +449,7 @@ jobs:
           HAS_PAT: ${{ secrets.AGENT_PAT != '' }}
           GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
           gh issue edit "$ISSUE_NUMBER" --add-label "agent:implement"
           if [ "$HAS_PAT" != "true" ]; then
             echo "::warning::AGENT_PAT is not set, so this label was added with GITHUB_TOKEN and will NOT start the next slice. ${REMAINING} sub-issue(s) remain on #${ISSUE_NUMBER}; remove and re-add agent:implement by hand to continue."
@@ -410,6 +458,14 @@ jobs:
       # The other leg, and the only place review is ever requested: once, when
       # the PRD has nothing open left. See the trade recorded at the top of this
       # file — intermediate slices deliberately get no review.
+      #
+      # `-e` for the same reason as the chaining step, and it matters more here:
+      # this is the only place `agent:review` is ever added. Swallowed, the last
+      # slice closes its sub-issue, the run goes green, and the PR sits finished
+      # and in draft with nobody asked to review it — and re-applying
+      # `agent:implement` to the parent then lands on the finished-PRD refusal,
+      # so there is no way back in through the workflow. Failing routes into
+      # `Mark blocked on failure`, whose comment names the PR to label by hand.
       - name: Request review
         if: steps.preflight.outputs.refused == 'false' && success() && steps.remaining.outputs.count == '0'
         env:
@@ -417,7 +473,7 @@ jobs:
           HAS_PAT: ${{ secrets.AGENT_PAT != '' }}
           GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
           gh pr edit "$PR_NUMBER" --add-label "agent:review"
           if [ "$HAS_PAT" != "true" ]; then
             echo "::warning::AGENT_PAT is not set, so this label was added with GITHUB_TOKEN and will NOT trigger agent-review. Add agent:review by hand on PR #${PR_NUMBER}."
@@ -431,6 +487,7 @@ jobs:
         if: steps.preflight.outputs.refused != 'true' && failure()
         env:
           SUB: ${{ steps.preflight.outputs.sub }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           reason="(no reason file written; check workflow logs)"
@@ -441,12 +498,23 @@ jobs:
           if [ -n "${SUB}" ]; then
             slice="#${SUB}"
           fi
+          # "Re-apply the label" is the right remedy for most of the ways this
+          # run can fail, and the wrong one for the late ones: everything after
+          # `Close the finished sub-issue` fails with that sub-issue already
+          # closed, so the retry hits the finished-PRD refusal instead of
+          # retrying anything. When the last slice is the one that died, the
+          # only way forward is the PR — so name it whenever there is one to
+          # name, rather than sending a human to the run log to work it out.
+          pr_note=""
+          if [ -n "${PR_NUMBER}" ]; then
+            pr_note=$(printf ' PR #%s holds the slices that have landed. If sub-issue %s is already closed, re-applying the label will refuse with "the PRD is finished" rather than retry — in that case add `agent:review` to PR #%s by hand instead.' "$PR_NUMBER" "$slice" "$PR_NUMBER")
+          fi
           body_file="${RUNNER_TEMP}/failure-comment.md"
           # "Re-apply", and the removal clause, for the same reason as
           # agent-implement.yml: this step also covers a preflight that failed
           # before `Transition labels` ran, where the label is still attached —
           # and adding a label that is already present fires no event.
-          printf '`agent:implement` run failed on sub-issue %s.\n\n**Reason:** %s\n\n**Workflow run:** %s\n\nThe chain has stopped. Re-apply `agent:implement` to this PRD to retry the same sub-issue; if it is still attached, remove it first — adding a label that is already present fires no event.\n' "$slice" "$reason" "$RUN_URL" > "$body_file"
+          printf '`agent:implement` run failed on sub-issue %s.\n\n**Reason:** %s\n\n**Workflow run:** %s\n\nThe chain has stopped. Re-apply `agent:implement` to this PRD to retry the same sub-issue; if it is still attached, remove it first — adding a label that is already present fires no event.%s\n' "$slice" "$reason" "$RUN_URL" "$pr_note" > "$body_file"
           gh issue edit "$ISSUE_NUMBER" --add-label "agent:blocked" || true
           gh issue comment "$ISSUE_NUMBER" --body-file "$body_file"
 
