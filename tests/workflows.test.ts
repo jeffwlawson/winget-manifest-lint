@@ -10,14 +10,14 @@ import { parse } from "yaml";
  * then fails at *startup* — zero jobs, no log, and the run surfaces only under
  * `push` events the workflow was never meant to handle.
  *
- * `agent-fix.yml` was down that way for two days. The trigger was a comment
+ * The fix workflow was down that way for two days. The trigger was a comment
  * *about* expression interpolation that contained a literal empty expression.
  *
  * The rule being encoded: **GitHub evaluates `${{ … }}` everywhere except YAML
  * comments** — including inside a `run:` block, where a `#` line is a comment
  * to bash but still an expression host to GitHub. That is the whole distinction
- * between the harmless note in `agent-review-reusable.yml` and the fatal one that
- * was in `agent-fix.yml`.
+ * between the harmless note in `agent-review-reusable.yml` and the fatal one it
+ * was written about, which sat in the fix workflow's base-fetch step.
  */
 
 const WORKFLOW_DIR = ".github/workflows";
@@ -26,15 +26,17 @@ const WORKFLOW_DIR = ".github/workflows";
  * The three PR workflows that act on a PR's branch. Every one of them has to
  * work against the PR's *real* base, not a hardcoded `main` (#71, #100).
  *
- * Review is named by its **reusable** half (#97): the guards, the env and every
- * step moved there, and its caller is a trigger and two wires. A check aimed at
- * the caller would pass by reading a file that no longer contains the thing it
- * is checking — which is the coverage failure this whole file exists to catch,
- * one level up.
+ * All three are named by their **reusable** half: the guards, the env and every
+ * step live there, and each caller is a trigger and two wires (#97 for review,
+ * #98 for the rest). A check aimed at a caller would pass by reading a file that
+ * no longer contains the thing it is checking — which is the coverage failure
+ * this whole file exists to catch, one level up.
  */
-const PR_WORKFLOWS = ["agent-review-reusable.yml", "agent-fix.yml", "agent-update-branch.yml"].map(
-  (f) => path.join(WORKFLOW_DIR, f),
-);
+const PR_WORKFLOWS = [
+  "agent-review-reusable.yml",
+  "agent-fix-reusable.yml",
+  "agent-update-branch-reusable.yml",
+].map((f) => path.join(WORKFLOW_DIR, f));
 
 const workflowFiles = fs
   .readdirSync(WORKFLOW_DIR)
@@ -75,13 +77,17 @@ const sandcastleFiles = filesUnder(".sandcastle");
  * catch, one level up.
  */
 const ISSUES_WRITE_EXEMPT = new Set([
-  // Reads the issue and transitions its labels; the permission is used.
+  // Reads the issue and transitions its labels; the permission is used. Both
+  // halves of the pair: the called job spends it, and the caller has to *grant*
+  // it — a called workflow can only downgrade the token it is handed (#98).
   "agent-implement.yml",
+  "agent-implement-reusable.yml",
   // Same, plus it closes each sub-issue it finishes and re-labels the parent to
   // chain the next one. Note what it still cannot do: create an issue. Closing
   // one the PRD already lists is not filing work, so "an agent that raises work
   // never files it" (docs/parity.md §10) is untouched.
   "agent-implement-prd.yml",
+  "agent-implement-prd-reusable.yml",
   // Files the AGENT_PAT expiry issue. Acts on no PR at all.
   "token-expiry.yml",
 ]);
@@ -128,6 +134,7 @@ interface Workflow {
       readonly secrets?: Record<string, { readonly required?: boolean }>;
     };
     readonly pull_request_target?: { readonly types?: readonly string[] };
+    readonly issues?: { readonly types?: readonly string[] };
   };
   readonly jobs: Record<string, Job>;
 }
@@ -166,9 +173,15 @@ const REVIEW = path.join(WORKFLOW_DIR, "agent-review-reusable.yml");
 /** …and the caller that triggers it. */
 const REVIEW_CALLER = path.join(WORKFLOW_DIR, "agent-review.yml");
 
-/** The two workflows that share the `agent:implement` label (#92). */
-const IMPLEMENT = path.join(WORKFLOW_DIR, "agent-implement.yml");
-const PRD = path.join(WORKFLOW_DIR, "agent-implement-prd.yml");
+/**
+ * The two workflows that share the `agent:implement` label (#92), again named by
+ * the half that holds the steps (#98).
+ */
+const IMPLEMENT = path.join(WORKFLOW_DIR, "agent-implement-reusable.yml");
+const PRD = path.join(WORKFLOW_DIR, "agent-implement-prd-reusable.yml");
+/** …and their callers, which is where the trigger and the label guard are read. */
+const IMPLEMENT_CALLER = path.join(WORKFLOW_DIR, "agent-implement.yml");
+const PRD_CALLER = path.join(WORKFLOW_DIR, "agent-implement-prd.yml");
 
 /** `agent-review`'s CI-collection step, which several checks below pick apart. */
 const waitStep = (): Step => {
@@ -181,8 +194,8 @@ const waitStep = (): Step => {
 /**
  * Line numbers (1-based) GitHub hands to the shell: the body of a `run:` block
  * scalar, and a single-line `run: <command>`. The inline form matters —
- * `agent-review.yml`'s base fetch is written that way, so a check that only
- * walked block scalars would pass over the very line #71 fixed.
+ * review's base fetch is written that way, so a check that only walked block
+ * scalars would pass over the very line #71 fixed.
  */
 const runBlockLines = (lines: readonly string[]): ReadonlySet<number> => {
   const inside = new Set<number>();
@@ -214,6 +227,16 @@ const runBlockLines = (lines: readonly string[]): ReadonlySet<number> => {
 /** The `run:` script of a step, found by id. */
 const runOf = (file: string, id: string): string =>
   stepsOf(file).find((s) => s.id === id)?.run ?? "";
+
+/**
+ * The two steps that make a run *expensive* — the Node setup and the dependency
+ * install — which a refusal must reach neither of. Keyed on the `setup` input
+ * rather than on `npm ci`: the command is the adopter's since #98, and a filter
+ * still naming this repo's would match nothing and pass by finding nothing.
+ */
+const isInstallStep = (s: Step): boolean =>
+  (s.run ?? "").includes("${{ inputs.setup }}") ||
+  (s.uses ?? "").startsWith("actions/setup-node@");
 
 /**
  * The body of a bash function declared in a `run:` block. The parser has
@@ -317,74 +340,127 @@ describe("workflow files", () => {
 });
 
 /**
- * A hardcoded `main` in a PR workflow is the #71/#100 failure class: on a PR
- * stacked on another branch every git operation silently addresses the wrong
- * branch — no error, wrong result. `agent-review.yml` and `agent-fix.yml` were
- * fixed in #71 and `agent-update-branch.yml` in #100; these keep all three
- * fixed, since nothing else here reads a workflow file.
+ * A hardcoded `main` is the #71/#100 failure class: on a PR stacked on another
+ * branch — or in a repo whose default branch is `master` — every git operation
+ * silently addresses the wrong branch. No error, wrong result.
+ *
+ * #71 and #100 fixed the three PR workflows, which read the base from the event.
+ * The two `implement` workflows have no event field to read: they *choose* a
+ * branch to work from, and #98 made that choice the `default-branch` input
+ * rather than a literal. So the rule is now one rule over the whole loop — no
+ * workflow, and no runner, names a default branch of its own.
  */
-describe("PR workflows work against the PR's base ref", () => {
+describe("the loop works against a base ref it is told, never a literal", () => {
   /**
-   * The event field is the source, and a fallback may follow it — review takes
-   * its fallback from a `workflow_call` input rather than from the literal
-   * `main` the other two still carry (#97). What is not allowed is the field
-   * being absent, or being read from anywhere but the event.
+   * Where the base comes from, per event. A PR event carries the real base and
+   * the input is only the fallback for an event that somehow carries none; an
+   * `issues` event carries nothing, so the input *is* the answer.
+   *
+   * Both are asserted as exact strings rather than a permissive regex: the
+   * failure being prevented is a base read from somewhere else entirely, and a
+   * pattern loose enough to allow either shape would allow that too.
    */
-  it.each(PR_WORKFLOWS)("%s: declares BASE_REF in the job env", (file) => {
-    expect(fs.readFileSync(file, "utf8")).toMatch(
-      /BASE_REF: \$\{\{ github\.event\.pull_request\.base\.ref( \|\| [^}]+?)? \}\}/,
+  it.each(PR_WORKFLOWS)("%s: falls back from the event to the input", (file) => {
+    expect(fs.readFileSync(file, "utf8")).toContain(
+      "BASE_REF: ${{ github.event.pull_request.base.ref || inputs.default-branch }}",
     );
+  });
+
+  it.each([IMPLEMENT, PRD])("%s: takes the base from the input alone", (file) => {
+    expect(fs.readFileSync(file, "utf8")).toContain("BASE_REF: ${{ inputs.default-branch }}");
   });
 
   /**
    * The word, not just `origin/main`. The failure class is "a git verb was
-   * handed `main`", which `git merge main --no-edit`, `git rev-parse main` and
-   * `base="main"` all are while matching no `origin/`-shaped pattern.
+   * handed `main`", which `git merge main --no-edit`, `git rev-parse main`,
+   * `gh pr create --base main` and `base="main"` all are while matching no
+   * `origin/`-shaped pattern.
    *
-   * Two exemptions, both narrow. Shell lines only, so a YAML comment may still
-   * say `origin/main` while explaining the fallback. And `${VAR:-main}` is
-   * stripped before the check: that *is* the fallback, reached only when
-   * `base.ref` is somehow empty.
+   * One exemption, and it is narrow: shell lines only, so a YAML comment may
+   * still say `origin/main` while explaining what the input replaced. The
+   * `${VAR:-main}` exemption this check used to carry is gone — every workflow
+   * now gets a non-empty `BASE_REF` from an input whose own default is the
+   * adopter's, so a second in-shell fallback would only ever fire on a repo
+   * that had already said `default-branch: ''` and meant it.
    */
-  const FALLBACK = /\$\{[A-Za-z_][A-Za-z0-9_]*:-main\}/g;
-
-  it.each(PR_WORKFLOWS)("%s: no shell line names main as a branch", (file) => {
+  it.each(runnerWorkflows)("%s: no shell line names main as a branch", (file) => {
     const lines = fs.readFileSync(file, "utf8").split("\n");
     const inRun = runBlockLines(lines);
 
     const offenders = lines
       .map((line, i) => ({ line, n: i + 1 }))
       .filter(({ line, n }) => inRun.has(n) && !/^\s*#/.test(line))
-      .filter(({ line }) => /\bmain\b/.test(line.replace(FALLBACK, "")))
+      .filter(({ line }) => /\bmain\b/.test(line))
       .map(({ line, n }) => `${file}:${n} ${line.trim()}`);
 
     expect(offenders).toEqual([]);
   });
 
   /**
-   * The prompt tells the agent which merge it is cleaning up after. Naming
-   * `main` there on a stacked PR sends it reading the wrong branch's history to
-   * reconcile a conflict that came from somewhere else.
+   * The prompts, which are the half an adopter cannot edit: they ship inside the
+   * package (#96), so a `main` in one is not a hand-edit an adopter forgot but a
+   * branch name they have no way to change at all.
    *
-   * `extraction.md` is checked too, and is the one that bites hardest: on the
-   * conflicts path its output *is* the comment posted to the PR, and it cannot
-   * be templated — `runWithExtraction` drops `promptArgs` before the extraction
-   * run, so a `{{BASE_REF}}` there would arrive literal. A `main`-shaped
-   * few-shot is the whole steer it gets.
+   * Walked rather than listed, for the same reason the de-domaining checks below
+   * are: the next prompt is written by someone with this repo's default branch
+   * in their head. `update-branch/extraction.md` is the one that bites hardest —
+   * on the conflicts path its output *is* the comment posted to the PR, and it
+   * cannot be templated, because `runWithExtraction` drops `promptArgs` before
+   * the extraction run and a `{{BASE_REF}}` there would arrive literal. A
+   * `main`-shaped few-shot is the whole steer it gets.
    */
-  it.each(["prompt.md", "extraction.md"])(
-    "update-branch/%s does not hardcode main",
-    (name: string) => {
-      const text = fs.readFileSync(`.sandcastle/agent-workflows/update-branch/${name}`, "utf8");
+  const promptFiles = sandcastleFiles.filter((f) => f.endsWith(".md") && !f.endsWith("README.md"));
 
-      expect(text).not.toMatch(/\borigin\/main\b|`main`/);
+  it("finds prompts to check", () => {
+    expect(promptFiles.length).toBeGreaterThan(0);
+  });
+
+  it.each(promptFiles)("%s: does not hardcode main", (file: string) => {
+    expect(fs.readFileSync(file, "utf8")).not.toMatch(/\borigin\/main\b|`main`|\bmain\.\.\.?/);
+  });
+
+  /**
+   * The three prompts that talk about a branch relationship say which branch,
+   * and say it from the environment. `update-branch` describes the merge it is
+   * cleaning up after; the two `implement` prompts tell the agent what its own
+   * branch was cut from and, for a PRD, what to diff to see the earlier slices.
+   */
+  it.each(["update-branch", "implement", "implement-prd"])(
+    "%s/prompt.md is templated with the base ref",
+    (dir: string) => {
+      expect(
+        fs.readFileSync(`.sandcastle/agent-workflows/${dir}/prompt.md`, "utf8"),
+      ).toContain("{{BASE_REF}}");
     },
   );
 
-  it("update-branch/prompt.md is templated with the base ref", () => {
-    const prompt = fs.readFileSync(".sandcastle/agent-workflows/update-branch/prompt.md", "utf8");
+  /**
+   * `implement.ts` counted commits with `git rev-list --count main..HEAD` — the
+   * only unconditional `main` in a runner rather than in YAML, and the only one
+   * that *hard-errors*: `sh` is `execSync`, so on a repo with no `main` ref the
+   * run aborts after the agent has done all of its work (docs/ADOPTING.md §5).
+   */
+  it("implement counts its commits against the base it was given", () => {
+    const text = fs.readFileSync(".sandcastle/agent-workflows/implement/implement.ts", "utf8");
 
-    expect(prompt).toContain("{{BASE_REF}}");
+    expect(text).not.toContain("main..HEAD");
+    expect(text).toContain('required("BASE_REF")');
+  });
+
+  /**
+   * …and `update-branch.ts` renders the base into its prompt, so an unset
+   * `BASE_REF` there described the wrong merge rather than failing. Required
+   * now: the workflow always supplies one, so an absent value is a
+   * misconfiguration to say out loud rather than to paper over.
+   */
+  it("update-branch requires the base ref rather than defaulting to one", () => {
+    const text = fs.readFileSync(
+      ".sandcastle/agent-workflows/update-branch/update-branch.ts",
+      "utf8",
+    );
+
+    expect(text).toContain('required("BASE_REF")');
+    expect(text).not.toMatch(/\|\|\s*"main"/);
   });
 });
 
@@ -537,11 +613,10 @@ describe("agent-review refuses a head that moved while it was queued", () => {
 });
 
 /**
- * `agent-review` is the first workflow split into a **caller** and a
- * `workflow_call` half (#97, slice 3 of #88). The loop is the deliverable and
- * it is installed in other repos, so what an adopter writes has to be the two
- * wires below and nothing else — every control stays on this side, in a file
- * they reference rather than copy.
+ * The whole loop is now callable (#98, slice 4 of #88; #97 proved the pattern on
+ * review). The loop is the deliverable and it is installed in other repos, so
+ * what an adopter writes per workflow has to be a trigger and two wires — every
+ * control stays on this side, in a file they reference rather than copy.
  *
  * A reusable workflow rather than a composite action for one reason: an action
  * cannot declare `on:`, `permissions:`, `concurrency:` or a job-level `if:`,
@@ -549,14 +624,34 @@ describe("agent-review refuses a head that moved while it was queued", () => {
  * checkout → node → install and left every control to be copy-pasted per repo,
  * which is how they drift.
  *
- * The checks here are about the seam itself. Everything about what the job
- * *does* is checked by the describes above, which read the reusable file
- * because `PR_WORKFLOWS` and `REVIEW` name it — that redirection is the point,
- * and a check still aimed at the caller would be green over an empty file.
+ * The checks here are about the seam itself. Everything about what each job
+ * *does* is checked by the describes around them, which read the reusable files
+ * because `PR_WORKFLOWS`, `REVIEW`, `IMPLEMENT` and `PRD` name them — that
+ * redirection is the point, and a check still aimed at a caller would be green
+ * over an empty file.
  */
-describe("agent-review is called rather than copied", () => {
-  const caller = (): Job => jobOf(REVIEW_CALLER);
-  const call = () => workflowOf(REVIEW).on?.workflow_call;
+describe("every workflow in the loop is called rather than copied", () => {
+  const callOf = (file: string) => workflowOf(file).on?.workflow_call;
+  /** The runner half a caller hands over to. */
+  const targetOf = (file: string): string => (jobOf(file).uses ?? "").replace(/^\.\//, "");
+
+  /**
+   * Five pairs, and *only* five: a workflow that is neither half of one is a
+   * workflow an adopter would have to copy. Derived from `uses:` rather than
+   * from the file names, so a half-done conversion — a `-reusable.yml` with no
+   * caller, or a caller left doing the work itself — lands here rather than
+   * being silently bucketed.
+   */
+  it("splits every agent workflow into a caller and a runner", () => {
+    expect(callerWorkflows.map((f) => path.basename(f)).sort()).toEqual([
+      "agent-fix.yml",
+      "agent-implement-prd.yml",
+      "agent-implement.yml",
+      "agent-review.yml",
+      "agent-update-branch.yml",
+    ]);
+    expect(callerWorkflows.map(targetOf).sort()).toEqual(runnerWorkflows.slice().sort());
+  });
 
   /**
    * Whatever a caller hands over to has to be a file this suite reads. The
@@ -566,61 +661,161 @@ describe("agent-review is called rather than copied", () => {
    * was extracted from would still parse clean.
    */
   it.each(callerWorkflows)("%s: calls a workflow this suite already checks", (file) => {
-    const target = (jobOf(file).uses ?? "").replace(/^\.\//, "");
-
-    expect(runnerWorkflows).toContain(target);
-    expect(workflowFiles).toContain(target);
+    expect(runnerWorkflows).toContain(targetOf(file));
+    expect(workflowFiles).toContain(targetOf(file));
   });
 
-  it("the caller is a trigger and nothing else", () => {
-    const doc = workflowOf(REVIEW_CALLER);
+  /**
+   * The trigger is the one thing `workflow_call` cannot carry, so it stays with
+   * the caller — and nothing else does. A caller with `steps:` is a caller that
+   * has started keeping a copy.
+   */
+  it.each(callerWorkflows)("%s: is a trigger and nothing else", (file) => {
+    const doc = workflowOf(file);
+    const trigger = doc.on?.pull_request_target ?? doc.on?.issues;
 
-    // Also what keeps the check above honest: `it.each` over an empty list
-    // passes by running nothing.
-    expect(callerWorkflows).toContain(REVIEW_CALLER);
-    expect(doc.on?.pull_request_target?.types).toEqual(["labeled"]);
-    expect(caller().uses).toBe(`./${REVIEW}`);
-    expect(caller().steps).toBeUndefined();
+    expect(trigger?.types).toEqual(["labeled"]);
+    expect(jobOf(file).steps).toBeUndefined();
+    expect(jobOf(file).uses).toBe(`./${targetOf(file)}`);
   });
 
   /**
    * The run keeps the caller's name, and that is load-bearing rather than
    * cosmetic: review's failure-log tail skips workflow runs named `Agent …`
    * (`case "$rname" in "Agent "*`), and a called workflow contributes no run of
-   * its own — there is one run, named here. Rename this and every agent run's
+   * its own — there is one run, named here. Rename these and every agent run's
    * failure log starts arriving in review's prompt as evidence about the diff.
    */
-  it("keeps the run name the failure-log filter matches on", () => {
-    expect(workflowOf(REVIEW_CALLER).name).toBe("Agent Review");
+  it.each(callerWorkflows)("%s: keeps the name the failure-log filter matches on", (file) => {
+    expect(workflowOf(file).name ?? "").toMatch(/^Agent /);
   });
 
   /**
-   * Both guards live in the **called** job. A caller's `if:` can only skip this
-   * job, never loosen it, so putting the fork guard there would make it
-   * something an adopter can leave behind — and a fork PR reaching the
-   * checkout+install steps runs untrusted code with secrets in scope, which is
-   * the one failure in this file that is not recoverable by re-labelling.
+   * The label guard is on the **called** side, in every pair. A caller's `if:`
+   * can only skip the job, never loosen it, so a guard put there is a guard an
+   * adopter can leave behind.
    */
-  it("guards the fork and the label on this side of the seam", () => {
-    const guard = jobOf(REVIEW).if ?? "";
+  it.each(runnerWorkflows)("%s: guards its trigger label on this side of the seam", (file) => {
+    expect(jobOf(file).if ?? "").toMatch(/github\.event\.label\.name == 'agent:[a-z-]+'/);
+  });
 
-    expect(guard).toContain(
+  /**
+   * …and so is the fork guard, on the three `pull_request_target` workflows. A
+   * fork PR reaching the checkout+install steps runs untrusted code with secrets
+   * in scope, which is the one failure in this file that is not recoverable by
+   * re-labelling.
+   *
+   * The two `implement` workflows are excluded because they trigger on `issues`,
+   * where there is no head repo to compare: nothing is checked out from a
+   * contributor at all.
+   */
+  it.each(PR_WORKFLOWS)("%s: guards the fork on this side of the seam", (file) => {
+    expect(jobOf(file).if ?? "").toContain(
       "github.event.pull_request.head.repo.full_name == github.repository",
     );
-    expect(guard).toContain("github.event.label.name == 'agent:review'");
   });
+
+  /**
+   * Permissions are declared **twice** — for opposite reasons, which is why this
+   * is not the duplication it looks like.
+   *
+   * A called workflow can only *downgrade* the token it is handed. So the
+   * callee's block is the bound: it cannot be widened from the caller, which is
+   * what keeps `contents: read` on review an invariant (docs/parity.md §10). And
+   * the caller's block is the grant: on a repo whose default `GITHUB_TOKEN` is
+   * read-only, a permission declared only in the callee grants nothing, and
+   * every `gh` call needing it 403s — a run that costs a full agent pass and
+   * silently transitions no label at all.
+   *
+   * Asserted as equality between the halves rather than against a table, so the
+   * property held is the one that matters: neither half can drift from the
+   * other, whatever the job ends up needing.
+   */
+  it.each(callerWorkflows)("%s: grants exactly what the called job bounds", (file) => {
+    const granted = jobOf(file).permissions;
+
+    expect(granted).toEqual(jobOf(targetOf(file)).permissions);
+    expect(Object.keys(granted ?? {})).not.toHaveLength(0);
+  });
+
+  /**
+   * Named, not inherited. `secrets: inherit` hands the called workflow every
+   * secret the repository holds, including the ones this loop has no use for —
+   * and it is the form that reads as tidier, so the list is worth pinning.
+   */
+  it.each(callerWorkflows)("%s: passes both secrets by name", (file) => {
+    const declared = callOf(targetOf(file))?.secrets ?? {};
+
+    expect(Object.keys(declared).sort()).toEqual(["AGENT_PAT", "CLAUDE_CODE_OAUTH_TOKEN"]);
+    // The agent cannot run without its token. The PAT is optional everywhere —
+    // every use of it falls back to `GITHUB_TOKEN` under a warning (§1) — and
+    // an unset optional secret arrives as the empty string, which is what those
+    // fallbacks test.
+    expect(declared["CLAUDE_CODE_OAUTH_TOKEN"]?.required).toBe(true);
+    expect(declared["AGENT_PAT"]?.required).toBe(false);
+
+    expect(jobOf(file).secrets).not.toBe("inherit");
+    expect(Object.keys(jobOf(file).secrets ?? {}).sort()).toEqual([
+      "AGENT_PAT",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+    ]);
+  });
+
+  /**
+   * Every input is typed and says what it is for — an adopter reads only this.
+   * `self-check` is review's alone and is checked with the rest of the CI wait
+   * below; these three are the couplings docs/ADOPTING.md §5 used to ask every
+   * adopter to hand-edit in every file.
+   */
+  const SHARED_INPUTS = [
+    ["default-branch", "main"],
+    ["node-version-file", ".nvmrc"],
+    ["setup", "npm ci"],
+  ] as const;
+
+  it.each(runnerWorkflows)("%s: declares the three shared inputs, typed and described", (file) => {
+    for (const [name, value] of SHARED_INPUTS) {
+      const input = callOf(file)?.inputs?.[name];
+
+      expect(input?.type).toBe("string");
+      expect(input?.description ?? "").not.toBe("");
+      // The defaults are this repo's own values, which is what lets every
+      // caller here pass none of them — so the conversion changed no behaviour.
+      expect(input?.default).toBe(value);
+    }
+  });
+
+  /**
+   * Both toolchain steps are skippable, and that is the whole of the non-Node
+   * story: a repo with no `.nvmrc` and no `npm ci` passes empty strings and
+   * still gets the loop, on the image's own Node.
+   *
+   * `npm install -g @anthropic-ai/claude-code` is deliberately not skippable —
+   * that is the agent's own runtime rather than the adopter's toolchain, and
+   * every runner image already has the Node it needs for it.
+   */
+  it.each(runnerWorkflows)("%s: takes the toolchain from the caller", (file) => {
+    const node = stepsOf(file).find((s) => (s.uses ?? "").startsWith("actions/setup-node@"));
+    const install = stepsOf(file).find((s) => (s.run ?? "").includes("${{ inputs.setup }}"));
+
+    expect(node?.with?.["node-version-file"]).toBe("${{ inputs.node-version-file }}");
+    expect(node?.if ?? "").toContain("inputs.node-version-file != ''");
+    expect(install?.if ?? "").toContain("inputs.setup != ''");
+  });
+});
+
+/**
+ * The one input that is a fact about the *caller* rather than about the repo,
+ * and the one control the extraction itself put at risk (#97).
+ */
+describe("agent-review tells its caller what it cannot know", () => {
+  const caller = (): Job => jobOf(REVIEW_CALLER);
+  const call = () => workflowOf(REVIEW).on?.workflow_call;
 
   /**
    * `contents: read` is the invariant that bounds what a wrong review can do
-   * (docs/parity.md §10), and it has to be declared **twice** — for opposite
-   * reasons, which is why this is not the duplication it looks like.
-   *
-   * A called workflow can only *downgrade* the token it is handed. So the
-   * callee's block is the bound: it cannot be widened from the caller. And the
-   * caller's block is the grant: on a repo whose default `GITHUB_TOKEN` is
-   * read-only, `pull-requests: write` declared only in the callee grants
-   * nothing, and every `gh pr edit` in the job 403s — a review that runs, costs
-   * an agent pass, and silently never transitions a label.
+   * (docs/parity.md §10). The generic check above holds the two halves equal to
+   * each other; this is the one pair where the *value* is the point.
    */
   it.each([
     ["the caller grants", REVIEW_CALLER],
@@ -629,63 +824,11 @@ describe("agent-review is called rather than copied", () => {
     expect(jobOf(file).permissions).toEqual({ contents: "read", "pull-requests": "write" });
   });
 
-  /**
-   * Named, not inherited. `secrets: inherit` hands the called workflow every
-   * secret the repository holds, including the ones this loop has no use for —
-   * and it is the form that reads as tidier, so the list is worth pinning.
-   */
-  it("passes both secrets by name", () => {
-    const declared = call()?.secrets ?? {};
+  it("declares the self-check input, typed and described", () => {
+    const input = call()?.inputs?.["self-check"];
 
-    expect(Object.keys(declared).sort()).toEqual(["AGENT_PAT", "CLAUDE_CODE_OAUTH_TOKEN"]);
-    // The agent cannot run without its token; the PAT only marks the PR ready,
-    // and its absence is already a warning the run survives (§1).
-    expect(declared["CLAUDE_CODE_OAUTH_TOKEN"]?.required).toBe(true);
-    expect(declared["AGENT_PAT"]?.required).toBe(false);
-
-    expect(caller().secrets).not.toBe("inherit");
-    expect(Object.keys(caller().secrets ?? {}).sort()).toEqual([
-      "AGENT_PAT",
-      "CLAUDE_CODE_OAUTH_TOKEN",
-    ]);
-  });
-
-  /** Every input is typed and says what it is for — an adopter reads only this. */
-  it.each(["default-branch", "node-version-file", "setup", "self-check"])(
-    "declares the %s input",
-    (name: string) => {
-      const input = call()?.inputs?.[name];
-
-      expect(input?.type).toBe("string");
-      expect(input?.description ?? "").not.toBe("");
-    },
-  );
-
-  /**
-   * The three couplings docs/ADOPTING.md §5 asks an adopter to hand-edit, now
-   * reaching the job as inputs. The defaults are this repo's values, so the
-   * caller passes none of them and the conversion changes nothing here.
-   */
-  it("takes the base-ref fallback from the caller", () => {
-    expect(fs.readFileSync(REVIEW, "utf8")).toContain(
-      "BASE_REF: ${{ github.event.pull_request.base.ref || inputs.default-branch }}",
-    );
-    expect(call()?.inputs?.["default-branch"]?.default).toBe("main");
-  });
-
-  it("takes the Node setup and the dependency install from the caller", () => {
-    const node = stepsOf(REVIEW).find((s) => (s.uses ?? "").startsWith("actions/setup-node@"));
-    const install = stepsOf(REVIEW).find((s) => (s.run ?? "").includes("${{ inputs.setup }}"));
-
-    expect(node?.with?.["node-version-file"]).toBe("${{ inputs.node-version-file }}");
-    expect(install).toBeDefined();
-    // Both skippable, and that is the whole of the non-Node story: a repo with
-    // no `.nvmrc` and no `npm ci` passes empty strings and still gets a review,
-    // on the image's own Node.
-    expect(node?.if ?? "").toContain("inputs.node-version-file != ''");
-    expect(install?.if ?? "").toContain("inputs.setup != ''");
-    expect(call()?.inputs?.["node-version-file"]?.default).toBe(".nvmrc");
-    expect(call()?.inputs?.["setup"]?.default).toBe("npm ci");
+    expect(input?.type).toBe("string");
+    expect(input?.description ?? "").not.toBe("");
   });
 
   /**
@@ -742,7 +885,7 @@ describe("agent-review is called rather than copied", () => {
  * or, worse, invented a spurious change and opened a duplicate PR.
  */
 describe("agent-implement refuses a closed issue", () => {
-  const FILE = path.join(WORKFLOW_DIR, "agent-implement.yml");
+  const FILE = IMPLEMENT;
 
   it("reads the issue state from the event", () => {
     expect(fs.readFileSync(FILE, "utf8")).toContain(
@@ -802,7 +945,7 @@ describe("agent-implement refuses a closed issue", () => {
  * handed to `agent-implement-prd` instead. See the partition describe below.
  */
 describe("agent-implement refuses issue shapes it cannot handle", () => {
-  const FILE = path.join(WORKFLOW_DIR, "agent-implement.yml");
+  const FILE = IMPLEMENT;
   const preflightRun = (): string => stepsOf(FILE)[0]?.run ?? "";
 
   /**
@@ -884,13 +1027,12 @@ describe("agent-implement refuses issue shapes it cannot handle", () => {
 
   /**
    * The job-level `if:` saves a runner for the wrong *label*; this saves the
-   * expensive half of the run for the wrong *issue*. `agent-implement.yml:9-12`
-   * records why that distinction is worth keeping.
+   * expensive half of the run for the wrong *issue*. The note on the job-level
+   * `if:` in `agent-implement-reusable.yml` records why that distinction is
+   * worth keeping.
    */
   it("installs nothing when it refuses", () => {
-    const install = stepsOf(FILE).filter(
-      (s) => (s.run ?? "").includes("npm ci") || (s.uses ?? "").startsWith("actions/setup-node@"),
-    );
+    const install = stepsOf(FILE).filter(isInstallStep);
 
     expect(install).not.toHaveLength(0);
     for (const step of install) expect(step.if ?? "").toContain(NOT_REFUSED);
@@ -931,11 +1073,18 @@ describe("agent-implement refuses issue shapes it cannot handle", () => {
 describe("the two implement workflows partition issue shapes", () => {
   const preflight = (file: string): string => stepsOf(file)[0]?.run ?? "";
 
-  it.each([IMPLEMENT, PRD])("%s: is triggered by agent:implement on an issue", (file) => {
-    const text = fs.readFileSync(file, "utf8");
-
-    expect(text).toContain("issues:\n    types: [labeled]");
-    expect(text).toContain("if: github.event.label.name == 'agent:implement'");
+  /**
+   * The trigger is on the caller and the label guard on the called job (#98) —
+   * so the pair is read across both halves, which is what the partition
+   * actually depends on: two workflows woken by one event, each deciding for
+   * itself whether the shape is theirs.
+   */
+  it.each([
+    [IMPLEMENT_CALLER, IMPLEMENT],
+    [PRD_CALLER, PRD],
+  ])("%s: is triggered by agent:implement on an issue", (callerFile: string, file: string) => {
+    expect(workflowOf(callerFile).on?.issues?.types).toEqual(["labeled"]);
+    expect(jobOf(file).if ?? "").toBe("github.event.label.name == 'agent:implement'");
   });
 
   /**
@@ -1112,10 +1261,7 @@ describe("agent-implement-prd works one sub-issue per run", () => {
 
   it.each([
     ["checks nothing out", (s: Step) => (s.uses ?? "").startsWith("actions/checkout@")],
-    [
-      "installs nothing",
-      (s: Step) => (s.run ?? "").includes("npm ci") || (s.uses ?? "").startsWith("actions/setup-node@"),
-    ],
+    ["installs nothing", isInstallStep],
     ["never enters agent:in-progress", (s: Step) => (s.run ?? "").includes('--add-label "agent:in-progress"')],
   ])("%s when it refuses or defers", (_case: string, match: (s: Step) => boolean) => {
     const steps = stepsOf(PRD).filter(match);
@@ -1245,8 +1391,8 @@ describe("agent-implement-prd works one sub-issue per run", () => {
    * re-apply `agent:implement` — lands on the finished-PRD refusal instead of
    * retrying anything. Both ends of that loop therefore have to name the other
    * way in: the PR, still open and in draft, wanting `agent:review` by hand.
-   * Otherwise it is the remedy-that-refuses-again trap agent-implement.yml
-   * warns about, with no exit at all.
+   * Otherwise it is the remedy-that-refuses-again trap the single-issue
+   * preflight warns about, with no exit at all.
    */
   it("names the draft PR as the way out when the chain dies after its last close", () => {
     const failed = stepsOf(PRD).find((s) => (s.run ?? "").includes("failure_reason.txt"));

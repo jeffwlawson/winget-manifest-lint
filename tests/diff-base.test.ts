@@ -35,10 +35,18 @@ describe("diffCommandAgainstBase", () => {
     expect(diffCommandAgainstBase("release/1.x")).toEqual(["diff", "release/1.x...HEAD"]);
   });
 
-  it("falls back to main when the base ref is absent or empty", () => {
-    expect(diffCommandAgainstBase(undefined)).toEqual(["diff", "main...HEAD"]);
-    expect(diffCommandAgainstBase("")).toEqual(["diff", "main...HEAD"]);
-    expect(diffCommandAgainstBase("   ")).toEqual(["diff", "main...HEAD"]);
+  /**
+   * It used to fall back to `main`, which was the same silent wrong-branch
+   * failure one level down: on a `master` repo every review diffed against a ref
+   * that did not exist, or worse, one that did and was stale. Every workflow now
+   * supplies `BASE_REF` from the PR event with the `default-branch` input behind
+   * it (#98), so an empty value is a misconfiguration rather than a case to
+   * absorb — and the runner's `fail()` puts the message on the PR.
+   */
+  it("refuses an absent or empty base ref rather than guessing one", () => {
+    for (const absent of [undefined, "", "   "]) {
+      expect(() => diffCommandAgainstBase(absent)).toThrow(/BASE_REF/);
+    }
   });
 
   it("keeps a shell-metacharacter ref as one argument rather than splitting it", () => {
