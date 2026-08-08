@@ -62,25 +62,11 @@ See [`docs/agents/triage-labels.md`](./docs/agents/triage-labels.md).
 
 ### Ticket shape
 
-`/to-tickets` publishes a batch as a **parent PRD with native sub-issues**, not as flat peers: the
-`/to-spec` output becomes the parent's body, and each slice becomes a sub-issue of it
-(`gh issue create --parent`).
-
-- **Create the sub-issues in dependency order, blockers first.** `agent-implement-prd.yml` targets
-  the first still-open sub-issue *in sub-issues API order* and never reads `blocked-by`, so
-  creation order **is** execution order. The right shape in the wrong order runs slices before
-  their blockers, and nothing catches it.
-- **Give siblings native `blocked-by` edges as well** (`gh issue create --blocked-by`, needs
-  `gh` >= 2.94.0) — the record of why the order is what it is.
-- **No ticket in the batch gets an `agent:*` label** — parent and slices alike carry
-  `ready-for-agent` and nothing else. A **human** later adds `agent:implement` to the parent
-  alone, and that one label starts the whole chain.
-- **Verify natively before labelling anything.** Re-read parent, children and edges through the
-  API (`gh issue view --json subIssues` / `--json parent,blockedBy,labels`). `/to-tickets` does not
-  reliably emit native relations, and a prose `Blocked by:` line is invisible to every consumer.
-
-Its slicing judgement is kept in full — only the publish target and the ordering change.
-See [`docs/agents/ticket-shape.md`](./docs/agents/ticket-shape.md).
+`/to-tickets` publishes a batch as a parent PRD with native sub-issues, created in dependency order.
+The shape, the ordering contract, the label rule and the checks to run before labelling anything all
+live in [`docs/agents/ticket-shape.md`](./docs/agents/ticket-shape.md) — read it in full before
+publishing a batch. Nothing here summarises it, on purpose: a summary of a procedure is a second
+copy that goes stale, and the bullets that used to sit here put the steps in the wrong order.
 
 ### Domain docs
 
