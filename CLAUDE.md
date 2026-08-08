@@ -72,8 +72,9 @@ See [`docs/agents/triage-labels.md`](./docs/agents/triage-labels.md).
   their blockers, and nothing catches it.
 - **Give siblings native `blocked-by` edges as well** (`gh issue create --blocked-by`, needs
   `gh` >= 2.94.0) — the record of why the order is what it is.
-- **Sub-issues get `ready-for-agent` only.** `agent:implement` goes on the parent alone; that one
-  label starts the whole chain.
+- **No ticket in the batch gets an `agent:*` label** — parent and slices alike carry
+  `ready-for-agent` and nothing else. A **human** later adds `agent:implement` to the parent
+  alone, and that one label starts the whole chain.
 - **Verify natively before labelling anything.** Re-read parent, children and edges through the
   API (`gh issue view --json subIssues` / `--json parent,blockedBy,labels`). `/to-tickets` does not
   reliably emit native relations, and a prose `Blocked by:` line is invisible to every consumer.

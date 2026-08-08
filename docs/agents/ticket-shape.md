@@ -82,10 +82,8 @@ already carried by creation order, and the chain does not need to be told to wai
 
 `gh issue create` prints the new issue's URL as its last line; everything below keys off that.
 `--parent` and `--blocked-by` need **`gh` >= 2.94.0** (the release that added issue types,
-sub-issues and relationships to `gh issue`; verified present in 2.96.0). On an older `gh`, or where
-the flags are unavailable, fall back to the REST endpoints — the `blocked_by` one is documented in
-[`issue-tracker.md`](./issue-tracker.md#wayfinding-operations) and takes the blocker's numeric
-**database id**, not its `#number`.
+sub-issues and relationships to `gh issue`; verified present in 2.96.0). On an older `gh` the same
+two relations are REST endpoints — below.
 
 ```bash
 new() { basename "$(gh issue create "$@" | tail -n1)"; }
@@ -106,6 +104,30 @@ s3=$(new --parent "$prd" --label "ready-for-agent" --blocked-by "$s2" \
 A slice that blocks on more than one earlier slice takes them all:
 `--blocked-by "$s1,$s2"`. Edges only ever point *backwards*, at slices already created — a forward
 edge means the order is wrong.
+
+**Without those flags**, create each slice plainly and attach it afterwards, still one slice at a
+time. Both relations are REST endpoints, and every id in either one is the issue's numeric
+**database id**, not its `#number`. That is the trap, and it is silent: an issue number is a valid
+database id for some *other* issue, so the call does not fail — it attaches something you did not
+mean, or nothing.
+
+```bash
+id() { gh api "repos/jeffwlawson/winget-manifest-lint/issues/$1" --jq .id; }
+
+# Stands in for --parent, and this is the one that matters: it is the relation the chain walks.
+# Miss it and the PRD has zero sub-issues — the chain defers, agent-implement takes the parent
+# as a standalone issue, and one run implements the whole spec.
+gh api --method POST "repos/jeffwlawson/winget-manifest-lint/issues/$prd/sub_issues" \
+  -F sub_issue_id="$(id "$s1")"
+
+# Stands in for --blocked-by. Same endpoint /wayfinder uses; see
+# issue-tracker.md#wayfinding-operations.
+gh api --method POST "repos/jeffwlawson/winget-manifest-lint/issues/$s2/dependencies/blocked_by" \
+  -F issue_id="$(id "$s1")"
+```
+
+Attaching a sub-issue this way appends it to the parent's list exactly as `--parent` does, so
+calling the endpoint slice by slice, blockers first, still gives execution order.
 
 **Only publish slices you intend this chain to run.** The chain implements *every* open sub-issue,
 so a slice parked as "maybe later" is a slice the chain will build. #91 had to be detached from #87
@@ -161,8 +183,8 @@ What to check, in order of how expensive it is to get wrong:
    top-level issue and link the map from its body.
 
 If the order is wrong, move the slice rather than recreating it — `gh` has no flag for this, so it
-is the REST endpoint, and every id in it is a **database id**, not a `#number` (same trap as the
-`blocked_by` endpoint in [`issue-tracker.md`](./issue-tracker.md#wayfinding-operations)):
+is the REST endpoint, and every id in it is a **database id**, not a `#number` (the same trap as
+the fallback endpoints under *Publishing*, and the same `id()` helper):
 
 ```bash
 id() { gh api "repos/jeffwlawson/winget-manifest-lint/issues/$1" --jq .id; }
