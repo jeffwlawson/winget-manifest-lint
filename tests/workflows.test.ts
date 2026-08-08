@@ -49,12 +49,18 @@ const workflowFiles = fs
  * same rule, and a hand-maintained list is precisely what a new prompt would not
  * be added to.
  *
- * Two directory names are skipped, both gitignored and neither authored:
+ * Three directory names are skipped, all gitignored and none authored here:
  * `output/` is scratch written by a local run (`shared/common.ts`'s
- * `outputDir()`), and `dist/` is the compiled package a local build leaves
- * behind — checking it would test `tsc`'s copy of a file already checked.
+ * `outputDir()`), `dist/` is the compiled package a local build leaves behind —
+ * checking it would test `tsc`'s copy of a file already checked — and
+ * `node_modules/` is somebody else's source entirely. The last is latent today,
+ * since the package's build resolves `tsc` from the hoisted root install and
+ * nothing has ever run `npm install` in that prefix; the day something does, the
+ * de-domain and gate-command greps below would walk the whole dependency tree
+ * and fail on a stranger's word. `copy-assets.ts` — the walker over this same
+ * tree, written in this same slice — already skips all three.
  */
-const SKIPPED_DIRS = new Set(["output", "dist"]);
+const SKIPPED_DIRS = new Set(["output", "dist", "node_modules"]);
 
 const filesUnder = (dir: string): readonly string[] =>
   fs
@@ -167,6 +173,9 @@ const stepsOf = (file: string): readonly Step[] => jobOf(file).steps ?? [];
 const agentWorkflows = workflowFiles.filter((f) => path.basename(f).startsWith("agent-"));
 const callerWorkflows = agentWorkflows.filter((f) => jobOf(f).uses !== undefined);
 const runnerWorkflows = agentWorkflows.filter((f) => jobOf(f).uses === undefined);
+
+/** The runner half a caller hands over to. */
+const targetOf = (file: string): string => (jobOf(file).uses ?? "").replace(/^\.\//, "");
 
 /** The review job — the reusable half, where every step now lives (#97). */
 const REVIEW = path.join(WORKFLOW_DIR, "agent-review-reusable.yml");
@@ -490,10 +499,31 @@ describe("every PR workflow shares one concurrency group per PR", () => {
    * from the wait, not just review's own.
    */
   it("agent-review waits on no agent job", () => {
-    const excluded = waitStep().env?.["AGENT_CHECKS"] ?? "";
+    const excluded = new RegExp(waitStep().env?.["AGENT_CHECKS"] ?? "");
 
-    for (const job of ["review", "fix", "update-branch", "implement"]) {
-      expect(excluded).toContain(job);
+    // The names the loop actually produces, derived from the workflows rather
+    // than listed: a called workflow's job is `<caller job id> / <called job
+    // id>`, so every sibling was renamed by the conversion (#98). This check
+    // used to assert the pattern *contained* the words `review`, `fix` and so
+    // on — which `^(review|fix|update-branch|implement)$` did while matching
+    // none of the names below, so it stayed green over a review that would
+    // queue behind a labelled `fix` and burn its whole 900 s on it.
+    const checkRuns = callerWorkflows.map(
+      (file) => `${Object.keys(workflowOf(file).jobs)[0]} / ${Object.keys(workflowOf(targetOf(file)).jobs)[0]}`,
+    );
+
+    expect(checkRuns).toHaveLength(5);
+    for (const name of checkRuns) expect(name).toMatch(excluded);
+    // Bare job ids too — an adopter is free to inline a job rather than call
+    // one, and the pattern predates the split.
+    for (const name of ["review", "fix", "update-branch", "implement", "implement-prd"]) {
+      expect(name).toMatch(excluded);
+    }
+
+    // Bounded at both ends, or the exclusion eats the CI it exists to collect.
+    // These are repo checks whose names merely start or end near an agent's.
+    for (const name of ["fixtures", "CI", "CI / verify", "CI / fix-lint", "build / fixtures"]) {
+      expect(name).not.toMatch(excluded);
     }
     // Both jq filters — the one that decides whether to keep waiting and the
     // one that writes the list into the prompt. A pattern only the second used
@@ -632,8 +662,6 @@ describe("agent-review refuses a head that moved while it was queued", () => {
  */
 describe("every workflow in the loop is called rather than copied", () => {
   const callOf = (file: string) => workflowOf(file).on?.workflow_call;
-  /** The runner half a caller hands over to. */
-  const targetOf = (file: string): string => (jobOf(file).uses ?? "").replace(/^\.\//, "");
 
   /**
    * Five pairs, and *only* five: a workflow that is neither half of one is a
@@ -838,12 +866,16 @@ describe("agent-review tells its caller what it cannot know", () => {
    * the extraction.
    *
    * The name changes as a *result* of the extraction. A called workflow's job
-   * appears as `<caller job id> / <called job id>`, so the anchored
-   * `AGENT_CHECKS` regex that used to match `review` no longer matches
-   * anything, and nothing inside a called workflow can read its caller's job
-   * id. Hence an input — compared as a literal rather than folded into the
-   * regex, because a job id is not a regex and `.` in one would quietly match
-   * a neighbour.
+   * appears as `<caller job id> / <called job id>`, and nothing inside a called
+   * workflow can read its caller's job id. Hence an input — compared as a
+   * literal rather than folded into the regex, because a job id is not a regex
+   * and `.` in one would quietly match a neighbour.
+   *
+   * `AGENT_CHECKS` now covers the same name, and the overlap is deliberate
+   * rather than dead: that pattern is a heuristic over names nobody declares,
+   * and this is the exact answer the caller was made to state. Self-exclusion
+   * is the one case with no error to read when it is wrong, so it does not get
+   * to depend on a heuristic.
    */
   it("excludes its own check run from the wait, in both filters", () => {
     const step = waitStep();
