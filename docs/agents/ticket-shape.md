@@ -26,10 +26,13 @@ Two relationships, doing different jobs:
 Both are **native** GitHub relations, not prose in a body. A `Blocked by: #12` line is invisible to
 every consumer: the API does not report it, the UI does not draw it, and no workflow can act on it.
 
-Upstream carries both, not either. #93 checked `mattpocock/course-video-manager` on 2026-08-07 —
-its newest feature at the time, #1514–#1518 — and found #1517 carrying `Parent: #1514` **and**
-`Blocked by: #1516`, with no sub-issue carrying a workflow trigger label. Re-check before trusting
-that upstream still does it this way; the reasoning below stands on its own either way.
+Upstream carries both relationships, but **as body prose, not natively**. #93 checked
+`mattpocock/course-video-manager` on 2026-08-07 — its newest feature at the time, #1514–#1518 —
+and found #1517 with `## Parent` → `#1514` and `## Blocked by` → `- #1516` written into its body,
+while the API reports `parent: null`, `blocked_by: 0` and no sub-issues on #1514 (re-verified
+2026-08-08). That is the `/to-tickets` defect below (#513) seen from the outside, and it is what
+this file exists to correct. Only the labels already match: every ticket carries `ready-for-agent`
+and no workflow trigger label.
 
 ## Creation order is execution order
 
@@ -87,7 +90,8 @@ the flags are unavailable, fall back to the REST endpoints — the `blocked_by` 
 ```bash
 new() { basename "$(gh issue create "$@" | tail -n1)"; }
 
-# 1. The parent. Its body is the /to-spec output, unedited.
+# 1. The parent. Its body is the /to-spec output, unedited. No --parent of its own: a nested
+#    PRD is refused by the chain, even when the /to-spec ran off a /wayfinder map.
 prd=$(new --title "Adopt the PRD tier" --body-file spec.md --label "ready-for-agent")
 
 # 2. The slices, one command per slice, in dependency order — blockers first.
@@ -119,7 +123,8 @@ Re-read all three, and read them the way the workflow does:
 
 ```bash
 # The work-list, in the order the chain will walk it. This is the whole scheduling policy.
-gh issue view "$prd" --json subIssues
+# `parent` on the PRD itself must come back null — see 5 below.
+gh issue view "$prd" --json subIssues,parent,labels
 
 # Per slice: the parent link, the edges, and that no agent:* label crept in.
 gh issue view "$s2" --json number,parent,blockedBy,labels
@@ -147,6 +152,13 @@ What to check, in order of how expensive it is to get wrong:
    chain — the PRD finishes without it, and nothing reports a gap.
 3. Every slice after the first has the `blockedBy` edge the order implies.
 4. `labels` is `ready-for-agent` and nothing else.
+5. **The PRD's own `parent` is null.** The one item on this list that fails loudly rather than
+   silently, which is why it is last — and the one that costs the most to fix afterwards. A PRD
+   that is itself a sub-issue is refused by `agent-implement-prd` ("this PRD is itself a sub-issue
+   of #N … Flatten the hierarchy") and deferred away by `agent-implement`, so `agent:implement`
+   does nothing at all. It is an easy shape to reach by accident: a `/wayfinder` map's children are
+   sub-issues of the map (`issue-tracker.md`), and `/to-spec` runs off that map — file the PRD as a
+   top-level issue and link the map from its body.
 
 If the order is wrong, move the slice rather than recreating it — `gh` has no flag for this, so it
 is the REST endpoint, and every id in it is a **database id**, not a `#number` (same trap as the

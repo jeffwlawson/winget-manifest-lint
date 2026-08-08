@@ -49,7 +49,7 @@ Seven labels. Six are live; `agent:queued` is declared but inert (see below). `d
 
 | Label | Applied to | Consumed by | Notes |
 |---|---|---|---|
-| `agent:implement` | issue | `agent-implement.yml` | the only entry point from a plain issue |
+| `agent:implement` | issue | `agent-implement.yml`, `agent-implement-prd.yml` | the only entry point from an issue. Two workflows on one label, partitioned by issue shape — a PRD-shaped parent goes to the chain, everything else to the single-issue run (`docs/parity.md` §2a) |
 | `agent:review` | PR | `agent-review.yml` | added automatically by `agent-implement` on the PR it opens |
 | `agent:fix` | PR | `agent-fix.yml` | act on review feedback; always a human decision, never cascaded |
 | `agent:update-branch` | PR | `agent-update-branch.yml` | refresh the branch from the PR's base |
@@ -126,13 +126,18 @@ So: `/triage` and `/to-tickets` may write `ready-for-agent` freely. Only a human
 
 **No `agent-*` workflow triggers on any of them, and none ever should.** They are a human planning
 surface; `docs/parity.md` §1 records the deliberate split — planning happens locally with a human
-in the loop, execution happens in CI. A `wayfinder:*` ticket enters the agent loop the same way
-any other issue does: a human triages it, then labels it `agent:implement`. The label itself
-carries no execution meaning.
+in the loop, execution happens in CI.
 
-`wayfinder:map` in particular must never be labelled `agent:implement`. A map is a container, not
-a unit of work, and `agent-implement` has no refusal for that shape (`docs/parity.md` §2 lists
-"refuses a sub-issue / PRD-shaped issue" as absent).
+**Since #90 that is enforced, not just intended.** `agent-implement.yml` and
+`agent-implement-prd.yml` both refuse any issue carrying a `wayfinder:*` label outright, whatever
+shape it has, and both check the label ahead of the hierarchy — a `wayfinder:map` with children is
+handed to the PRD workflow first, which carries the same refusal. So labelling one
+`agent:implement` earns a refusal comment and `agent:blocked`, not a run. `docs/parity.md` §2
+rates that refusal ➕: ours, with no CVM equivalent.
+
+A map is a container rather than a unit of work, and a decision ticket describes work rather than
+being it. Label the issues they produce instead — a `wayfinder:*` ticket does not enter the agent
+loop, and re-triaging it to `ready-for-agent` does not change that while the label is still on it.
 
 ---
 
