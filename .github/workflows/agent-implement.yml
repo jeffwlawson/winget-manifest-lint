@@ -28,19 +28,27 @@ jobs:
       GH_REPO: ${{ github.repository }}
 
     steps:
-      # Five refusals, in order, all of them here rather than in the agent: this
-      # step runs before checkout and `npm ci`, so a refusal costs one API call
-      # and nothing else.
+      # Four refusals and one deferral, in order, all of them here rather than
+      # in the agent: this step runs before checkout and `npm ci`, so neither
+      # costs more than one API call.
       #
-      # The state check has to come first: the PR query below lists open PRs
-      # only, so an issue whose PR has already merged looks exactly like an
-      # issue nobody has started. It then checks out `main`, finds the work
-      # already there, and usually dies at "no commits were made" — or, worse,
-      # invents a change and opens a duplicate PR (#102).
+      # The **partition** has to come first (#92). `agent-implement-prd.yml`
+      # shares this trigger label and owns every issue that has sub-issues, so
+      # both jobs start on every label event and exactly one of them may speak.
+      # This step settles which before it says anything at all — including about
+      # a closed issue, which would otherwise collect the same "not open"
+      # comment twice, seconds apart, from two runs that cannot see each other.
       #
-      # Then shape (#90), before the PR query rather than after: an issue that
-      # must never be implemented should not be handed "close that PR, then
-      # re-add the label", a remedy that leads straight back to a refusal.
+      # Then state. The PR query below lists open PRs only, so an issue whose PR
+      # has already merged looks exactly like an issue nobody has started. It
+      # then checks out `main`, finds the work already there, and usually dies
+      # at "no commits were made" — or, worse, invents a change and opens a
+      # duplicate PR (#102).
+      #
+      # Then the rest of the shape (#90), before the PR query rather than after:
+      # an issue that must never be implemented should not be handed "close that
+      # PR, then re-add the label", a remedy that leads straight back to a
+      # refusal.
       #
       # Distinct messages throughout, on purpose. "Someone is already on this",
       # "this is finished" and "this is not implementable as labelled" call for
@@ -71,9 +79,15 @@ jobs:
             refuse "$1"
           }
 
-          if [ "$ISSUE_STATE" != "open" ]; then
-            refuse "Refused to run: this issue is not open. Reopen it first, then re-add \`agent:implement\`."
-          fi
+          # Not a refusal, and deliberately touching nothing: the PRD workflow
+          # owns this shape and is running right now on the same event. A
+          # comment here would sit beside its comment saying the opposite, and a
+          # label edit would race the re-label its chain depends on.
+          defer() {
+            echo "refused=true" >> "$GITHUB_OUTPUT"
+            echo "$1"
+            exit 0
+          }
 
           # One query for the whole shape — parent, sub-issues and labels
           # together. Asking separately is two chances to see a different
@@ -105,27 +119,36 @@ jobs:
           # two code spans in the comment, not one span holding a comma.
           wayfinder=$(jq -r '[.labels.nodes[].name | select(startswith("wayfinder:"))] | join("`, `")' <<< "$issue")
 
-          if [ -n "$parent" ]; then
-            shape=has-parent
-          elif [ "$subs" -gt 0 ]; then
+          # Sub-issue count first, so a *nested* PRD — sub-issues and a parent —
+          # is `has-sub-issues` and goes to the PRD workflow. That is the one
+          # shape both workflows could plausibly claim, and the PRD path is the
+          # one that can explain what is wrong with it.
+          if [ "$subs" -gt 0 ]; then
             shape=has-sub-issues
+          elif [ -n "$parent" ]; then
+            shape=has-parent
           else
             shape=standalone
           fi
           echo "shape=$shape" >> "$GITHUB_OUTPUT"
 
+          if [ "$shape" = "has-sub-issues" ]; then
+            defer "#${ISSUE_NUMBER} has ${subs} sub-issue(s), so agent-implement-prd.yml owns this label event."
+          fi
+
+          if [ "$ISSUE_STATE" != "open" ]; then
+            refuse "Refused to run: this issue is not open. Reopen it first, then re-add \`agent:implement\`."
+          fi
+
           # Checked before the hierarchy, since a wayfinder ticket is refused
-          # whichever shape it happens to have.
+          # whichever shape it happens to have. The PRD workflow carries the
+          # same refusal, for the wayfinder map that has sub-issues.
           if [ -n "$wayfinder" ]; then
             refuse_shape "Refused to run: this issue carries \`${wayfinder}\`. Wayfinder maps and decision tickets are planning artifacts, not implementable work — they describe what to build and where the decisions are. Label the issues they produce instead."
           fi
 
           if [ "$shape" = "has-parent" ]; then
-            refuse_shape "Refused to run: this issue is a sub-issue of #${parent}. Sub-issues are driven by their parent, never labelled directly — implemented alone, this one loses the ordering and the shared context the parent holds."
-          fi
-
-          if [ "$shape" = "has-sub-issues" ]; then
-            refuse_shape "Refused to run: this issue has ${subs} sub-issue(s), so it is a PRD-shaped parent rather than a unit of work. The PRD path that works sub-issues in sequence is not built yet; until it lands, implement the slices by hand."
+            refuse_shape "Refused to run: this issue is a sub-issue of #${parent}. Sub-issues are driven by their parent, never labelled directly — implemented alone, this one loses the ordering and the shared context the parent holds. Label #${parent} instead: the PRD workflow works its sub-issues in order, one per run."
           fi
 
           existing=$(gh pr list --state open --json number,url,body \

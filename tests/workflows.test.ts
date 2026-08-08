@@ -45,6 +45,11 @@ const workflowFiles = fs
 const ISSUES_WRITE_EXEMPT = new Set([
   // Reads the issue and transitions its labels; the permission is used.
   "agent-implement.yml",
+  // Same, plus it closes each sub-issue it finishes and re-labels the parent to
+  // chain the next one. Note what it still cannot do: create an issue. Closing
+  // one the PRD already lists is not filing work, so "an agent that raises work
+  // never files it" (docs/parity.md §10) is untouched.
+  "agent-implement-prd.yml",
   // Files the AGENT_PAT expiry issue. Acts on no PR at all.
   "token-expiry.yml",
 ]);
@@ -86,6 +91,10 @@ const stepsOf = (file: string): readonly Step[] => jobOf(file).steps ?? [];
 
 const REVIEW = path.join(WORKFLOW_DIR, "agent-review.yml");
 
+/** The two workflows that share the `agent:implement` label (#92). */
+const IMPLEMENT = path.join(WORKFLOW_DIR, "agent-implement.yml");
+const PRD = path.join(WORKFLOW_DIR, "agent-implement-prd.yml");
+
 /** `agent-review`'s CI-collection step, which several checks below pick apart. */
 const waitStep = (): Step => {
   const step = stepsOf(REVIEW).find((s) => (s.name ?? "").startsWith("Wait for other checks"));
@@ -125,6 +134,44 @@ const runBlockLines = (lines: readonly string[]): ReadonlySet<number> => {
     inside.add(i + 1);
   }
   return inside;
+};
+
+/** The `run:` script of a step, found by id. */
+const runOf = (file: string, id: string): string =>
+  stepsOf(file).find((s) => s.id === id)?.run ?? "";
+
+/**
+ * The body of a bash function declared in a `run:` block. The parser has
+ * already stripped the block scalar's own indent, so a top-level declaration
+ * sits at column 0 and its closing brace is the next `}` at that same indent.
+ *
+ * Used to assert what a *refusal* does versus what a *deferral* does, which is
+ * the whole difference between the two implement workflows' idle paths and is
+ * invisible to a grep over the step as a whole.
+ */
+const bashFunctionBody = (run: string, name: string): string => {
+  const lines = run.split("\n");
+  const open = lines.findIndex((l) => l.trimStart().startsWith(`${name}() {`));
+
+  expect(open).toBeGreaterThanOrEqual(0);
+  const indent = indentOf(lines[open] ?? "");
+  const close = lines.findIndex(
+    (l, i) => i > open && l.trimStart() === "}" && indentOf(l) === indent,
+  );
+
+  expect(close).toBeGreaterThan(open);
+  return lines.slice(open + 1, close).join("\n");
+};
+
+/** The body of an `if [ <condition> ]; then … fi` arm, up to its own `fi`. */
+const armOf = (run: string, condition: string): string => {
+  const start = run.indexOf(condition);
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = run.indexOf("\nfi", start);
+
+  expect(end).toBeGreaterThan(start);
+  return run.slice(start, end);
 };
 
 describe("workflow files", () => {
@@ -465,13 +512,14 @@ describe("agent-implement refuses a closed issue", () => {
  *
  * - **has a parent** — a sub-issue implemented alone loses the ordering and the
  *   shared context its parent holds; the parent drives it or nobody does.
- * - **has sub-issues** — PRD-shaped, and the path that works sub-issues in
- *   sequence does not exist yet (#92).
  * - **`wayfinder:*`** — maps and decision tickets are planning artifacts. They
  *   describe work; they are not work.
  *
- * All three are refused in the preflight step, which is what keeps them job-level
+ * Both are refused in the preflight step, which is what keeps them job-level
  * rather than agent-level: no checkout, no `npm ci`, no `agent:in-progress`.
+ *
+ * The third shape — **has sub-issues** — was refused too until #92, and is now
+ * handed to `agent-implement-prd` instead. See the partition describe below.
  */
 describe("agent-implement refuses issue shapes it cannot handle", () => {
   const FILE = path.join(WORKFLOW_DIR, "agent-implement.yml");
@@ -495,25 +543,15 @@ describe("agent-implement refuses issue shapes it cannot handle", () => {
   });
 
   /**
-   * Three refusals, three messages. A human reading only the comment has to be
-   * able to tell which of the three shapes they hit — the remedy differs for
-   * each, and "refused" alone sends them to the run log.
+   * Two refusals, two messages. A human reading only the comment has to be able
+   * to tell which shape they hit — the remedy differs for each, and "refused"
+   * alone sends them to the run log.
    */
   it.each([
     ["a sub-issue", "sub-issue of"],
-    ["a PRD-shaped parent", "sub-issue(s)"],
     ["a wayfinder ticket", "planning artifact"],
   ])("refuses %s with its own message", (_shape: string, phrase: string) => {
     expect(preflightRun()).toContain(phrase);
-  });
-
-  /**
-   * The PRD refusal has to say the path is *pending*, not that the issue is
-   * wrong. It is the one shape that becomes implementable later (#92) without
-   * anyone editing the issue.
-   */
-  it("names the PRD path as pending rather than rejecting the issue", () => {
-    expect(preflightRun()).toMatch(/PRD path[^\n]*not built yet/);
   });
 
   /**
@@ -587,5 +625,350 @@ describe("agent-implement refuses issue shapes it cannot handle", () => {
     const run = preflightRun();
 
     expect(run.indexOf("gh api graphql")).toBeLessThan(run.indexOf("gh pr list"));
+  });
+});
+
+/**
+ * `agent-implement-prd` (#92) is triggered by the **same label on the same
+ * event** as `agent-implement`, so both jobs start on every `agent:implement`
+ * label event and the pair has to partition the work between them. The key is
+ * the sub-issue count: an issue that has sub-issues belongs to the PRD path,
+ * every other shape to `agent-implement`.
+ *
+ * The property worth encoding is not which one runs — it is that **exactly one
+ * of them speaks**. Whichever does not own the shape has to step aside touching
+ * nothing at all:
+ *
+ * - no comment, or a human sees two bot comments about one event, saying
+ *   opposite things ("refused, the PRD path is not built" beside a run that is
+ *   building it);
+ * - no label edit, and this is the load-bearing half — the chain re-adds
+ *   `agent:implement` to the parent to start the next slice, and a second job
+ *   racing to *remove* it eats the chain silently.
+ *
+ * That is what `defer` is, in both preflights: a bare `exit 0` with a log line.
+ */
+describe("the two implement workflows partition issue shapes", () => {
+  const preflight = (file: string): string => stepsOf(file)[0]?.run ?? "";
+
+  it.each([IMPLEMENT, PRD])("%s: is triggered by agent:implement on an issue", (file) => {
+    const text = fs.readFileSync(file, "utf8");
+
+    expect(text).toContain("issues:\n    types: [labeled]");
+    expect(text).toContain("if: github.event.label.name == 'agent:implement'");
+  });
+
+  /**
+   * A deferral that comments is a second voice; a deferral that edits a label
+   * is a race with the other job. Asserted on the function body rather than the
+   * step, because the same step legitimately does both when it *refuses*.
+   */
+  it.each([IMPLEMENT, PRD])("%s: defers without commenting or touching a label", (file) => {
+    const body = bashFunctionBody(preflight(file), "defer");
+
+    expect(body).toContain('echo "refused=true"');
+    expect(body).not.toContain("gh ");
+  });
+
+  /** The other half of the contract: a refusal *does* speak, and consumes the label. */
+  it.each([IMPLEMENT, PRD])("%s: refuses by commenting and consuming the label", (file) => {
+    const body = bashFunctionBody(preflight(file), "refuse");
+
+    expect(body).toContain("gh issue comment");
+    expect(body).toContain('--remove-label "agent:implement"');
+  });
+
+  it("agent-implement hands every sub-issue-bearing issue to the PRD path", () => {
+    const arm = armOf(preflight(IMPLEMENT), '"$shape" = "has-sub-issues"');
+
+    expect(arm).toContain("defer ");
+    expect(arm).not.toContain("refuse");
+  });
+
+  it("agent-implement-prd hands back anything without sub-issues", () => {
+    const arm = armOf(preflight(PRD), '"$subs" -eq 0');
+
+    expect(arm).toContain("defer ");
+    expect(arm).not.toContain("refuse");
+  });
+
+  /**
+   * The partition has to be settled before *either* workflow says anything,
+   * including about a closed issue — otherwise a closed PRD parent collects the
+   * same "this issue is not open" comment twice, from two runs, seconds apart.
+   * So the shape query moved above the state check in `agent-implement` (it had
+   * been first since #102, when nothing else claimed the label).
+   */
+  it.each([IMPLEMENT, PRD])("%s: settles the partition before the state check", (file) => {
+    const run = preflight(file);
+
+    expect(run.indexOf("gh api graphql")).toBeLessThan(run.indexOf('defer "'));
+    expect(run.indexOf('defer "')).toBeLessThan(run.indexOf('"$ISSUE_STATE" != "open"'));
+  });
+
+  /**
+   * Sub-issues *of a PRD* are refused by `agent-implement` and deferred by the
+   * PRD path; a nested PRD — sub-issues **and** a parent — is the other way
+   * round, since the PRD path is the one that can explain what is wrong with
+   * it. Keyed on the shape computation testing the sub-issue count before the
+   * parent, which is what routes the overlap.
+   */
+  it("routes a nested PRD to the PRD path, not to agent-implement", () => {
+    const run = preflight(IMPLEMENT);
+
+    expect(run.indexOf('subs" -gt 0')).toBeLessThan(run.indexOf('parent" ]'));
+    expect(preflight(PRD)).toContain("nested");
+  });
+});
+
+/**
+ * The PRD chain itself. One sub-issue per run, in sub-issues API order,
+ * accumulating onto one branch and one PR, chaining to the next run by
+ * re-labelling the parent, and asking for review exactly once at the end.
+ *
+ * **Ordering comes from creation order, not from the edges.** The chain walks
+ * sub-issue API order and never reads `blocked-by`; that is safe only because
+ * sub-issues are *created* blockers-first, so the topological sort happens once,
+ * at publish time. Do not add edge-reading here — fix the publish order.
+ */
+describe("agent-implement-prd works one sub-issue per run", () => {
+  const NOT_REFUSED = "steps.preflight.outputs.refused == 'false'";
+  const PRD_GROUP = "agent-implement-prd-issue-${{ github.event.issue.number }}";
+
+  /**
+   * Per *parent issue*, first-come. Not the per-PR group the three PR workflows
+   * share: an `issues` event carries no PR number, so the two cannot compute a
+   * common key. That residual is recorded in docs/parity.md §10 rather than
+   * papered over here.
+   */
+  it("serialises the chain on the parent issue", () => {
+    const { concurrency } = jobOf(PRD);
+
+    expect(concurrency?.group).toBe(PRD_GROUP);
+    expect(concurrency?.["cancel-in-progress"]).toBe(false);
+  });
+
+  it("declares exactly one group", () => {
+    const groups = [...fs.readFileSync(PRD, "utf8").matchAll(/^\s*group:\s*(.+)$/gm)].map((m) =>
+      (m[1] ?? "").trim(),
+    );
+
+    expect(groups).toEqual([PRD_GROUP]);
+  });
+
+  it("guards first, and the guard is itself ungated", () => {
+    const first = stepsOf(PRD)[0];
+
+    expect(first?.id).toBe("preflight");
+    expect(first?.if).toBeUndefined();
+  });
+
+  /** One query for parent, labels and the sub-issue list together — see #90. */
+  it("computes the shape once, from a single API call", () => {
+    const run = runOf(PRD, "preflight");
+
+    expect([...run.matchAll(/gh api graphql/g)]).toHaveLength(1);
+    expect(run).toContain("parent {");
+    expect(run).toContain("subIssues(");
+    expect(run).toContain("nodes { number title state }");
+  });
+
+  /**
+   * The whole scheduling policy, in one jq filter: keep the OPEN ones in the
+   * order the API returned them, take the head. No sort, no edge read.
+   */
+  it("targets the first still-open sub-issue in API order", () => {
+    const run = runOf(PRD, "preflight");
+
+    expect(run).toContain('select(.state == "OPEN")');
+    expect(run).toContain("| .[0]");
+    expect(run).toContain("sub=");
+  });
+
+  /**
+   * Three refusals, three messages, and each one names a different thing to do
+   * about it. `agent:blocked` on the two durable shapes only: a PRD whose
+   * sub-issues have all closed is *finished*, and labelling a completed parent
+   * blocked leaves exactly the stale label docs/parity.md §10 warns about.
+   */
+  it.each([
+    ["a nested PRD", "nested"],
+    ["a wayfinder ticket", "planning artifact"],
+    ["a PRD with nothing left to do", "closed"],
+  ])("refuses %s with its own message", (_case: string, phrase: string) => {
+    expect(runOf(PRD, "preflight")).toContain(phrase);
+  });
+
+  it("marks the durable shape refusals blocked, and the finished PRD not", () => {
+    const run = runOf(PRD, "preflight");
+
+    expect(bashFunctionBody(run, "refuse_shape")).toContain('--add-label "agent:blocked"');
+    expect(armOf(run, "no open sub-issues")).not.toContain("refuse_shape");
+  });
+
+  /** Same exception as #90: "no answer" must never be read as a shape. */
+  it("does not swallow a failed shape query", () => {
+    const tolerant = runOf(PRD, "preflight")
+      .split("\n")
+      .filter((l) => l.includes("|| true") && !l.trimStart().startsWith("#"));
+
+    expect(tolerant).not.toHaveLength(0);
+    for (const line of tolerant) expect(line).toContain("gh issue edit");
+  });
+
+  it.each([
+    ["checks nothing out", (s: Step) => (s.uses ?? "").startsWith("actions/checkout@")],
+    [
+      "installs nothing",
+      (s: Step) => (s.run ?? "").includes("npm ci") || (s.uses ?? "").startsWith("actions/setup-node@"),
+    ],
+    ["never enters agent:in-progress", (s: Step) => (s.run ?? "").includes('--add-label "agent:in-progress"')],
+  ])("%s when it refuses or defers", (_case: string, match: (s: Step) => boolean) => {
+    const steps = stepsOf(PRD).filter(match);
+
+    expect(steps).not.toHaveLength(0);
+    for (const step of steps) expect(step.if ?? "").toContain(NOT_REFUSED);
+  });
+
+  /**
+   * The branch is the unit of accumulation, so it is created once and reused —
+   * looked up on the remote first, and only branched from the base when it is
+   * genuinely absent.
+   */
+  it("reuses one branch across the chain", () => {
+    const run = runOf(PRD, "prepare");
+
+    expect(runOf(PRD, "branch")).toContain("agent/prd-${ISSUE_NUMBER}-${slug}");
+    expect(run).toContain("git ls-remote");
+    expect(run.indexOf("git ls-remote")).toBeLessThan(run.indexOf("git checkout -b"));
+  });
+
+  /**
+   * **Plain `git push`.** `agent-implement` force-pushes because it owns a
+   * branch it created this run; here the branch carries every earlier slice, so
+   * a force push is a chain that silently eats its own history. A rejected
+   * non-fast-forward is the correct outcome instead.
+   */
+  it("pushes without force", () => {
+    const text = fs.readFileSync(PRD, "utf8");
+
+    expect(text).toContain('git push origin "$BRANCH"');
+    expect(text).not.toMatch(/git push[^\n]*--force/);
+  });
+
+  /** The PR is opened once and reused, the same way the branch is. */
+  it("reuses one PR across the chain", () => {
+    const run = runOf(PRD, "pr");
+
+    expect(run).toContain('gh pr list --head "$BRANCH"');
+    expect(run.indexOf("gh pr list")).toBeLessThan(run.indexOf("gh pr create"));
+    // Draft until review says otherwise: a PR mid-chain is precisely a pipeline
+    // that has not finished (docs/parity.md §10).
+    expect(run).toContain("gh pr create --draft");
+  });
+
+  it("closes the finished sub-issue with a comment naming the commit", () => {
+    const close = stepsOf(PRD).find((s) => (s.run ?? "").includes("gh issue close"));
+
+    expect(close?.if ?? "").toContain(NOT_REFUSED);
+    expect(close?.if ?? "").toContain("success()");
+    expect(close?.run ?? "").toContain("git rev-parse HEAD");
+    expect(close?.run ?? "").toContain("--comment");
+  });
+
+  /**
+   * Chain or hand off, never both, and gated on a **re-read** count rather than
+   * on the preflight's snapshot minus one — a sub-issue may have been added or
+   * closed by hand while the agent was running.
+   */
+  it("chains while sub-issues remain and requests review when none do", () => {
+    const chain = stepsOf(PRD).find((s) => (s.run ?? "").includes('--add-label "agent:implement"'));
+    const review = stepsOf(PRD).find((s) => (s.run ?? "").includes('--add-label "agent:review"'));
+
+    expect(runOf(PRD, "remaining")).toContain("gh api graphql");
+    expect(chain?.if ?? "").toContain("steps.remaining.outputs.count != '0'");
+    expect(review?.if ?? "").toContain("steps.remaining.outputs.count == '0'");
+    expect(chain?.run ?? "").toContain('gh issue edit "$ISSUE_NUMBER"');
+  });
+
+  /**
+   * Both label adds are silent no-ops under `GITHUB_TOKEN` — the anti-recursion
+   * rule (docs/ADOPTING.md §1). For the chain that is worse than for review: the
+   * label appears on the parent and the next slice simply never happens, which
+   * reads as "still working" forever.
+   */
+  it.each(['--add-label "agent:implement"', '--add-label "agent:review"'])(
+    "warns loudly when AGENT_PAT is absent for `%s`",
+    (adds: string) => {
+      const step = stepsOf(PRD).find((s) => (s.run ?? "").includes(adds));
+
+      expect(step?.env?.["GH_TOKEN"]).toBe("${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}");
+      expect(step?.env?.["HAS_PAT"]).toBe("${{ secrets.AGENT_PAT != '' }}");
+      expect(step?.run ?? "").toContain("::warning::");
+    },
+  );
+
+  /** Same `!= 'true'` gate as #90: a preflight that *dies* writes no output. */
+  it("comments on a preflight that fails rather than refuses", () => {
+    const blocked = stepsOf(PRD).find((s) => (s.run ?? "").includes("failure_reason.txt"));
+
+    expect(blocked?.if ?? "").toContain("steps.preflight.outputs.refused != 'true'");
+    expect(blocked?.if ?? "").toContain("failure()");
+    expect(blocked?.run ?? "").toContain('--add-label "agent:blocked"');
+  });
+
+  it("removes agent:in-progress however the run ends", () => {
+    const last = stepsOf(PRD).at(-1);
+
+    expect(last?.if ?? "").toContain("always()");
+    expect(last?.run ?? "").toContain('--remove-label "agent:in-progress"');
+  });
+});
+
+/**
+ * The runner contract, held to by every workflow in the set: fetch the context
+ * before the agent starts, scrub the token, and leave every tracker mutation to
+ * the workflow. `implement-prd` is the first runner handed *two* issues — the
+ * PRD for context and the sub-issue for the task — so both go through the same
+ * author gate.
+ */
+describe("the implement-prd runner keeps the agent off the tracker", () => {
+  const RUNNER = ".sandcastle/agent-workflows/implement-prd/implement-prd.ts";
+  const PROMPT = ".sandcastle/agent-workflows/implement-prd/prompt.md";
+
+  it("author-gates both issues and scrubs the token before running", () => {
+    const text = fs.readFileSync(RUNNER, "utf8");
+
+    // Every issue this runner reads goes through the trusted helpers — nothing
+    // shells out to `gh` for text. An ungated *PRD* body steers the agent just
+    // as effectively as an ungated sub-issue body, so both are named here.
+    expect(text).toContain("fetchTrustedIssue(");
+    expect(text).toContain("fetchTrustedComments(");
+    expect(text).not.toMatch(/safeSh\(|\bsh\(`gh /);
+    for (const source of ["ISSUE_NUMBER", "SUB_NUMBER"]) {
+      expect(text).toMatch(new RegExp(`issueSection\\(${source}`));
+    }
+    expect(text.indexOf("scrubGitHubTokens()")).toBeLessThan(text.indexOf("sandcastle.run"));
+  });
+
+  /**
+   * Counting commits against `main` would count every earlier slice, so a run
+   * where the agent did nothing at all would still look productive from the
+   * second slice on. The tip at entry is the only honest baseline.
+   */
+  it("measures this run's commits from the branch tip, not from main", () => {
+    const text = fs.readFileSync(RUNNER, "utf8");
+
+    expect(text).not.toContain("main..HEAD");
+    expect(text).toContain("rev-list");
+  });
+
+  it("tells the agent to implement one sub-issue and touch no tracker state", () => {
+    const prompt = fs.readFileSync(PROMPT, "utf8");
+
+    expect(prompt).toContain("{{SUB_NUMBER}}");
+    expect(prompt).toContain("{{BRANCH}}");
+    expect(prompt).toMatch(/Do not push\./);
+    expect(prompt).toMatch(/Do not close/);
   });
 });
