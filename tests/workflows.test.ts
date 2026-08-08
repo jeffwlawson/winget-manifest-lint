@@ -41,16 +41,19 @@ const workflowFiles = fs
  * same rule, and a hand-maintained list is precisely what a new prompt would not
  * be added to.
  *
- * `output/` is skipped — it is gitignored scratch written by a local run
- * (`shared/common.ts`'s `outputDir()`), so its contents are neither authored nor
- * shipped.
+ * Two directory names are skipped, both gitignored and neither authored:
+ * `output/` is scratch written by a local run (`shared/common.ts`'s
+ * `outputDir()`), and `dist/` is the compiled package a local build leaves
+ * behind — checking it would test `tsc`'s copy of a file already checked.
  */
+const SKIPPED_DIRS = new Set(["output", "dist"]);
+
 const filesUnder = (dir: string): readonly string[] =>
   fs
     .readdirSync(dir, { withFileTypes: true })
     .flatMap((entry) =>
       entry.isDirectory()
-        ? entry.name === "output"
+        ? SKIPPED_DIRS.has(entry.name)
           ? []
           : filesUnder(path.join(dir, entry.name))
         : [path.join(dir, entry.name)],
@@ -1061,6 +1064,118 @@ describe("the implement-prd runner keeps the agent off the tracker", () => {
     expect(prompt).toContain("{{BRANCH}}");
     expect(prompt).toMatch(/Do not push\./);
     expect(prompt).toMatch(/Do not close/);
+  });
+});
+
+/**
+ * The runners are invoked as a **version-pinned npm package**, never as a script
+ * addressed by path (#96).
+ *
+ * That is what retires the stale-runner trap. `pull_request_target` takes the
+ * workflow YAML from the *base* branch and checks out the **PR head**, so
+ * `npx tsx .sandcastle/…/review.ts` ran whatever version of the runner the PR
+ * happened to carry — silently, with no error, which is how #46 reviewed a diff
+ * with the pre-suggestion `review.ts`. A version in the YAML is on the base side
+ * of that split, so the runner is base-controlled like every other security
+ * control in these files.
+ *
+ * The pin has to live *here*. Depending on the package from the caller's
+ * `package.json` would put the version back under the PR head's control and
+ * change nothing at all.
+ */
+describe("every workflow invokes the runners at a pinned version", () => {
+  const PACKAGE_DIR = ".sandcastle/agent-workflows";
+  const manifest = JSON.parse(fs.readFileSync(path.join(PACKAGE_DIR, "package.json"), "utf8")) as {
+    readonly name: string;
+    readonly version: string;
+    readonly bin?: Record<string, string>;
+    readonly files?: readonly string[];
+  };
+
+  /** `agent-<name>.yml` runs the `<name>` subcommand — derived, not tabulated. */
+  const agentWorkflows = workflowFiles.filter((f) => path.basename(f).startsWith("agent-"));
+  const subcommandOf = (file: string): string =>
+    path.basename(file, path.extname(file)).replace(/^agent-/, "");
+
+  const escaped = manifest.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  /**
+   * An **exact** version, spelled out: `\d+\.\d+\.\d+` matches no `^`, no `~`,
+   * no `latest` and no dist-tag. Same reasoning as `.nvmrc` — a floating pin is
+   * a runner that changes under a PR nobody touched, which is the trap above
+   * with a longer fuse.
+   */
+  const PIN = new RegExp(`^npx --yes ${escaped}@(\\d+\\.\\d+\\.\\d+) ([a-z-]+)$`);
+
+  /** The one `npx` line in a workflow: the step that hands over to the runner. */
+  const invocation = (file: string): string => {
+    const invocations = stepsOf(file)
+      .map((step) => (step.run ?? "").trim())
+      .filter((run) => run.startsWith("npx"));
+
+    expect(invocations).toHaveLength(1);
+    return invocations[0] as string;
+  };
+
+  it("finds the agent workflows", () => {
+    expect(agentWorkflows.map(subcommandOf).sort()).toEqual([
+      "fix",
+      "implement",
+      "implement-prd",
+      "review",
+      "update-branch",
+    ]);
+  });
+
+  it.each(agentWorkflows)("%s: runs its own subcommand, at an exact version", (file) => {
+    const match = invocation(file).match(PIN);
+
+    expect(match).not.toBeNull();
+    expect(match?.[2]).toBe(subcommandOf(file));
+  });
+
+  /**
+   * The pin and the package are edited in different files, and neither edit
+   * fails on its own: publishing 0.2.0 without repinning leaves every workflow
+   * on the old runner, and repinning without publishing takes the whole loop
+   * down at `npx`. Both read as "done" to the person who did half of it.
+   */
+  it.each(agentWorkflows)("%s: pins the version this repo publishes", (file) => {
+    expect(invocation(file).match(PIN)?.[1]).toBe(manifest.version);
+  });
+
+  /**
+   * The other half of the same property: nothing may execute a runner *source*
+   * out of the checkout. A single surviving `npx tsx .sandcastle/…​.ts` line
+   * would be one workflow still on the PR-head side of the split, and it would
+   * look identical to the four that are not.
+   *
+   * Keyed on running a `.ts` file from that tree rather than on naming the tree
+   * at all: `npm --prefix .sandcastle/agent-workflows run build` names it and
+   * executes nothing the pull request wrote.
+   */
+  const RUNNER_BY_PATH = /\.sandcastle\/\S*\.ts\b/;
+
+  it.each(workflowFiles)("%s: runs no runner source out of the checkout", (file) => {
+    const lines = fs.readFileSync(file, "utf8").split("\n");
+    const inRun = runBlockLines(lines);
+
+    const offenders = lines
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line, n }) => inRun.has(n) && !/^\s*#/.test(line) && RUNNER_BY_PATH.test(line))
+      .map(({ line, n }) => `${file}:${n} ${line.trim()}`);
+
+    expect(offenders).toEqual([]);
+  });
+
+  /**
+   * One binary for the whole set. The per-workflow runners and the operator
+   * commands `init` / `doctor` (#112) share an entry point and therefore a
+   * version, so "which runner version is this repo on?" has one answer rather
+   * than five.
+   */
+  it("publishes one binary, built from source", () => {
+    expect(Object.values(manifest.bin ?? {})).toEqual(["./dist/cli.js"]);
+    expect(manifest.files).toContain("dist");
   });
 });
 

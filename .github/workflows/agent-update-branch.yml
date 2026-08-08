@@ -3,10 +3,15 @@ name: Agent Update Branch
 # Refresh a stale PR branch from the branch it is based on.
 #
 # Why this exists, concretely: `pull_request_target` takes the workflow YAML
-# from the base branch but checks out the PR *head*, so a PR opened before a
-# `.sandcastle/` change keeps running the OLD runner scripts — silently, with no
-# error. That bit us on #46, where a review ran the pre-suggestion review.ts and
-# the test proved nothing until `main` was merged in by hand.
+# from the base branch but checks out the PR *head*, so everything the run reads
+# out of the working tree comes from the pull request. That bit us on #46, where
+# a review ran the pre-suggestion runner and the test proved nothing until
+# `main` was merged in by hand.
+#
+# The *runner* half of that is closed structurally since #96: the runners are a
+# version pinned in this file, which is base-controlled. What still comes from
+# the PR head is the repo's own `CONTEXT.md` and `CLAUDE.md` — an agent applying
+# superseded conventions — and the code under review itself.
 #
 # Most refreshes are a clean merge, which needs no agent at all. The agent is
 # invoked only when git reports conflicts.
@@ -153,7 +158,7 @@ jobs:
           AGENT_MODEL_UPDATE_BRANCH: ${{ vars.AGENT_MODEL_UPDATE_BRANCH }}
           OUTPUT_DIR: ${{ runner.temp }}
           CONFLICTS: ${{ steps.merge.outputs.conflicts }}
-        run: npx tsx .sandcastle/agent-workflows/update-branch/update-branch.ts
+        run: npx --yes @jeffwlawson/agent-workflows@0.1.0 update-branch
 
       - name: Push branch
         if: steps.merge.outputs.status == 'clean' || steps.merge.outputs.status == 'conflicts'

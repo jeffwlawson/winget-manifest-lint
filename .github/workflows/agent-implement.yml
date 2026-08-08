@@ -220,7 +220,7 @@ jobs:
           AGENT_MODEL_IMPLEMENT: ${{ vars.AGENT_MODEL_IMPLEMENT }}
           BRANCH: ${{ steps.branch.outputs.name }}
           OUTPUT_DIR: ${{ runner.temp }}
-        run: npx tsx .sandcastle/agent-workflows/implement/implement.ts
+        run: npx --yes @jeffwlawson/agent-workflows@0.1.0 implement
 
       - name: Push branch
         if: steps.preflight.outputs.refused == 'false' && success()
