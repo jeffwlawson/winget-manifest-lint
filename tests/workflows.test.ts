@@ -850,11 +850,30 @@ describe("agent-implement-prd works one sub-issue per run", () => {
    * genuinely absent.
    */
   it("reuses one branch across the chain", () => {
-    const run = runOf(PRD, "prepare");
+    const branch = runOf(PRD, "branch");
+    const prepare = runOf(PRD, "prepare");
 
-    expect(runOf(PRD, "branch")).toContain("agent/prd-${ISSUE_NUMBER}-${slug}");
-    expect(run).toContain("git ls-remote");
-    expect(run.indexOf("git ls-remote")).toBeLessThan(run.indexOf("git checkout -b"));
+    expect(branch).toContain("git ls-remote");
+    expect(branch).toContain("agent/prd-${ISSUE_NUMBER}-${slug}");
+    expect(branch).toContain('name="$existing"');
+    expect(prepare.indexOf('"$EXISTS" = "true"')).toBeLessThan(prepare.indexOf("git checkout -b"));
+  });
+
+  /**
+   * The lookup is keyed on the **issue number**, not on the whole computed
+   * name. A branch name is `agent/prd-<n>-<slug>` and the slug comes from the
+   * parent's *title*, which a human may edit at any point; the number is the
+   * half nobody can. Recomputing the whole name every run means a retitle
+   * mid-chain misses the branch carrying slices 1..N-1, forks slice N off
+   * `main`, and opens a second draft PR with the same `Closes #<parent>` — the
+   * "created once and reused" property broken by an edit nobody would think of
+   * as dangerous. So the slug may only ever *name* a branch, never find one.
+   */
+  it("finds the branch by the half of its name a human cannot edit", () => {
+    const run = runOf(PRD, "branch");
+
+    expect(run).toContain('git ls-remote --heads origin "agent/prd-${ISSUE_NUMBER}-*"');
+    expect(run.indexOf("git ls-remote")).toBeLessThan(run.indexOf("${slug}"));
   });
 
   /**
@@ -921,6 +940,41 @@ describe("agent-implement-prd works one sub-issue per run", () => {
       expect(step?.run ?? "").toContain("::warning::");
     },
   );
+
+  /**
+   * …and fails when the add itself fails, which is a different thing and needs
+   * `-e` to hold. Both steps end with that warn-if-no-PAT `if`, which returns 0
+   * whenever the PAT *is* set — and it is the last command, so without `-e` a
+   * failed `gh ... --add-label` exits the step green. `Mark blocked on failure`
+   * is gated on `failure()` and would never fire: the chain halts on a green
+   * run with no agent label left on the parent, or the PR sits finished and in
+   * draft with nobody asked to review it.
+   */
+  it.each(['--add-label "agent:implement"', '--add-label "agent:review"'])(
+    "fails the run rather than swallowing a failed `%s`",
+    (adds: string) => {
+      const step = stepsOf(PRD).find((s) => (s.run ?? "").includes(adds));
+
+      expect(step?.run ?? "").toContain("set -euo pipefail");
+    },
+  );
+
+  /**
+   * Every step after `Close the finished sub-issue` fails with that sub-issue
+   * *already closed*, so on the last slice the failure comment's own remedy —
+   * re-apply `agent:implement` — lands on the finished-PRD refusal instead of
+   * retrying anything. Both ends of that loop therefore have to name the other
+   * way in: the PR, still open and in draft, wanting `agent:review` by hand.
+   * Otherwise it is the remedy-that-refuses-again trap agent-implement.yml
+   * warns about, with no exit at all.
+   */
+  it("names the draft PR as the way out when the chain dies after its last close", () => {
+    const failed = stepsOf(PRD).find((s) => (s.run ?? "").includes("failure_reason.txt"));
+
+    expect(failed?.env?.["PR_NUMBER"]).toBe("${{ steps.pr.outputs.number }}");
+    expect(failed?.run ?? "").toContain("agent:review");
+    expect(armOf(runOf(PRD, "preflight"), "no open sub-issues")).toContain("agent:review");
+  });
 
   /** Same `!= 'true'` gate as #90: a preflight that *dies* writes no output. */
   it("comments on a preflight that fails rather than refuses", () => {
