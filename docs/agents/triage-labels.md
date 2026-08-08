@@ -63,9 +63,14 @@ the label deliberately.
 ### `agent:queued`
 
 `agent:queued` marks a fully-specified issue that **cannot start yet** because a blocker is still
-open. `/to-tickets` produces that *situation* — it publishes a batch with blocking edges, where
-the first ticket is workable and the rest are not — but it does not apply this label, and neither
-does anything else. **A human writes `agent:queued`**, on the tickets that came out blocked.
+open. Nothing applies it: **a human writes `agent:queued`**, on the issues that came out blocked.
+
+Not on the slices of a `/to-tickets` batch, though. Since #93 that batch is a parent PRD whose
+slices are **sub-issues**, published blockers-first, and `agent-implement-prd` works them one at a
+time in that order — so every slice but the first is queued by construction, and saying so with a
+label adds nothing a human would act on. Sub-issues carry `ready-for-agent` and no `agent:*` label
+at all; see [`ticket-shape.md`](./ticket-shape.md). What is left for `agent:queued` is the tier
+above: dependencies between **top-level** issues.
 
 It is documented and created here so the vocabulary is settled before anything writes it, but
 **no workflow reads it today** either. Promotion (`agent:queued` → `agent:implement` when the last

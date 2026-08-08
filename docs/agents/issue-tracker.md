@@ -51,9 +51,13 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 - **Claim**: `gh issue edit <n> --add-assignee @me` — the session's first write.
 - **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
 
-## Not settled here
+## Settled elsewhere
 
 The **shape** of a `/to-tickets` batch — flat issues joined by blocking edges, versus a parent
-issue with sub-issues — is deliberately not fixed by this file. It is decided in #93. The
-wayfinding section above describes `/wayfinder`'s own map-and-children shape, which is a separate
-question and already settled by that skill.
+issue with sub-issues — is not fixed by this file. It is settled in
+[`ticket-shape.md`](./ticket-shape.md) (#93): a parent PRD with native sub-issues, created in
+dependency order. Read that before publishing a batch; the ordering there is load-bearing, not a
+presentational choice.
+
+The wayfinding section above describes `/wayfinder`'s own map-and-children shape, which is a
+separate question and already settled by that skill.
