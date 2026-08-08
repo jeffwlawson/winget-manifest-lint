@@ -124,7 +124,7 @@ jobs:
           AGENT_MODEL: ${{ vars.AGENT_MODEL }}
           AGENT_MODEL_FIX: ${{ vars.AGENT_MODEL_FIX }}
           OUTPUT_DIR: ${{ runner.temp }}
-        run: npx tsx .sandcastle/agent-workflows/fix/fix.ts
+        run: npx --yes @jeffwlawson/agent-workflows@0.1.0 fix
 
       # --force-with-lease pinned to the SHA we checked out: if anything else
       # advanced the branch during the run, refuse rather than clobber it.
