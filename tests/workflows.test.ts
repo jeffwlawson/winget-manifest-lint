@@ -36,6 +36,29 @@ const workflowFiles = fs
   .map((f) => path.join(WORKFLOW_DIR, f));
 
 /**
+ * Everything committed under `.sandcastle/`, found by walking rather than by
+ * listing: the point of the checks below is to hold a *file added later* to the
+ * same rule, and a hand-maintained list is precisely what a new prompt would not
+ * be added to.
+ *
+ * `output/` is skipped — it is gitignored scratch written by a local run
+ * (`shared/common.ts`'s `outputDir()`), so its contents are neither authored nor
+ * shipped.
+ */
+const filesUnder = (dir: string): readonly string[] =>
+  fs
+    .readdirSync(dir, { withFileTypes: true })
+    .flatMap((entry) =>
+      entry.isDirectory()
+        ? entry.name === "output"
+          ? []
+          : filesUnder(path.join(dir, entry.name))
+        : [path.join(dir, entry.name)],
+    );
+
+const sandcastleFiles = filesUnder(".sandcastle");
+
+/**
  * The only workflows allowed to hold `issues: write`, each with the reason it
  * needs one. Everything else is derived, not listed: a workflow added later is
  * held to the rule on arrival rather than on someone remembering to add it to a
@@ -1038,5 +1061,63 @@ describe("the implement-prd runner keeps the agent off the tracker", () => {
     expect(prompt).toContain("{{BRANCH}}");
     expect(prompt).toMatch(/Do not push\./);
     expect(prompt).toMatch(/Do not close/);
+  });
+});
+
+/**
+ * `.sandcastle/` is the agent loop, and the loop is the deliverable (#88) — it
+ * ships to other repos rather than living in this one. So nothing in it may name
+ * this repo's domain, and nothing in it may name this repo's toolchain.
+ *
+ * The seam that replaces both already exists and is load-bearing: every prompt
+ * reads `CONTEXT.md` and `CLAUDE.md` first, so what is specific to a repo lives
+ * with the adopter rather than with the template. The prompts point at those two
+ * files; the files answer.
+ *
+ * These are deliberately mechanical. De-domaining is a one-off edit anyone can
+ * do; *staying* de-domained is a habit, and the next prompt written under
+ * deadline will be written by someone who has this repo's vocabulary in their
+ * head and no reason to suspect it. A grep is what catches that; a review is
+ * what misses it.
+ */
+describe(".sandcastle names no repo of its own", () => {
+  it("finds files to check", () => {
+    expect(sandcastleFiles.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * The four terms are this repo's domain vocabulary as it actually leaked (#95):
+   * the product name, the field that is the whole role-vs-`ManifestType`
+   * distinction, the directory rules are registered in, and the constructor a
+   * rule is defined with.
+   *
+   * `.ts` files are in scope too, not only prompts — `shared/common.ts` carried
+   * the repo name as a Standard Schema `vendor`, which is exactly the kind of
+   * site a prompt-focused pass reads straight past.
+   */
+  const DOMAIN = /winget|ManifestType|src\/rules|defineRule/;
+
+  it.each(sandcastleFiles)("%s: names nothing specific to this project", (file: string) => {
+    const offenders = fs
+      .readFileSync(file, "utf8")
+      .split("\n")
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line }) => DOMAIN.test(line))
+      .map(({ line, n }) => `${file}:${n} ${line.trim()}`);
+
+    expect(offenders).toEqual([]);
+  });
+
+  /**
+   * The gate command is the other half. It cannot become a `{{…}}` argument:
+   * `runWithExtraction` drops `promptArgs` before the extraction run, so
+   * `update-branch/extraction.md` — whose output *is* the comment posted to the
+   * PR — would receive one literal, the same trap the base-ref checks above
+   * record. The placeholder is therefore the pointer the prompts already carry:
+   * `CLAUDE.md` names the command and the prompt names `CLAUDE.md`, which is what
+   * `docs/ADOPTING.md` §6 asks an adopter to write down anyway.
+   */
+  it.each(sandcastleFiles)("%s: points at the gate rather than naming it", (file: string) => {
+    expect(fs.readFileSync(file, "utf8")).not.toContain("npm run verify");
   });
 });
