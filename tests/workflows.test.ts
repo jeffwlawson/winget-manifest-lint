@@ -799,6 +799,20 @@ describe("agent-implement-prd works one sub-issue per run", () => {
     expect(runOf(PRD, "preflight")).toContain(phrase);
   });
 
+  /**
+   * `totalCount` is unpaged and `nodes` is not, so past the page size the head
+   * of the open list can sit off the end of the page — and "no open sub-issue"
+   * is read as *finished*. Refusing loudly beats closing a PRD that has work
+   * left in it.
+   */
+  it("refuses rather than silently reading a truncated sub-issue list", () => {
+    const run = runOf(PRD, "preflight");
+
+    expect(run).toContain("subIssues(first: 100)");
+    expect(armOf(run, '"$subs" -gt 100')).toContain("refuse_shape");
+    expect(run.indexOf('"$subs" -gt 100')).toBeLessThan(run.indexOf("no open sub-issues"));
+  });
+
   it("marks the durable shape refusals blocked, and the finished PRD not", () => {
     const run = runOf(PRD, "preflight");
 

@@ -177,6 +177,15 @@ jobs:
             refuse_shape "Refused to run: this PRD is itself a sub-issue of #${parent}, and nested PRDs have no single owner of the ordering — #${parent}'s chain and this one would run over each other. Flatten the hierarchy, then label the outermost parent."
           fi
 
+          # The query pages at 100, and `totalCount` does not. Past that, `next`
+          # can come back empty while open sub-issues sit off the end of the
+          # page — and the refusal below would then report a PRD as *finished*
+          # when it is not, which is the plausible-wrong-answer class every
+          # other guard in this file exists to prevent. Refuse loudly instead.
+          if [ "$subs" -gt 100 ]; then
+            refuse_shape "Refused to run: #${ISSUE_NUMBER} has ${subs} sub-issues and this workflow reads the first 100, so it cannot see the whole chain. Split the PRD, or raise the page size in \`agent-implement-prd.yml\`."
+          fi
+
           # The whole scheduling policy, in one filter: keep the open ones in
           # the order the API returned them, take the head. No sort, no edge
           # read — see the note at the top of this file.
