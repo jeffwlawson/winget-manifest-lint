@@ -11,8 +11,9 @@ the `gh` CLI for all operations.
 >
 > **`/setup-matt-pocock-skills` overwrites this file.** Everything in it is tracker *mechanics*, so
 > re-applying the local additions after a regeneration stays a small diff — the scope note, the
-> *Native relations* section, and the pointer at the bottom. Nothing about PRD shape, ordering or
-> labels belongs here for exactly that reason; it lives in
+> *Native relations* section, the two *Wayfinding* bullets that cross-reference that section instead
+> of repeating the endpoints inline, and the pointer at the bottom. Nothing about PRD shape,
+> ordering or labels belongs here for exactly that reason; it lives in
 > [`ticket-shape.md`](./ticket-shape.md), which the skill does not touch.
 
 ## Conventions
@@ -64,17 +65,20 @@ On an older `gh`, or to attach after the fact, both are REST endpoints:
 ```bash
 id() { gh api "repos/jeffwlawson/winget-manifest-lint/issues/$1" --jq .id; }
 
-# attach <child> under <parent>; appends to the end of the parent's list
-gh api --method POST "repos/jeffwlawson/winget-manifest-lint/issues/<parent>/sub_issues" \
-  -F sub_issue_id="$(id <child>)"
+# p=parent, c=child, b=blocker, a=anchor — all plain issue numbers, e.g. p=100 c=101 b=101 a=101
+# The number goes in the path; the database id goes in the body. Never the other way round.
 
-# record that <issue> is blocked by <blocker>
-gh api --method POST "repos/jeffwlawson/winget-manifest-lint/issues/<issue>/dependencies/blocked_by" \
-  -F issue_id="$(id <blocker>)"
+# attach $c under $p; appends to the end of $p's list
+gh api --method POST "repos/jeffwlawson/winget-manifest-lint/issues/$p/sub_issues" \
+  -F sub_issue_id="$(id "$c")"
 
-# reorder: move <sub> to sit directly after <anchor> in <parent>'s list
-gh api --method PATCH "repos/jeffwlawson/winget-manifest-lint/issues/<parent>/sub_issues/priority" \
-  -F sub_issue_id="$(id <sub>)" -F after_id="$(id <anchor>)"
+# record that $c is blocked by $b
+gh api --method POST "repos/jeffwlawson/winget-manifest-lint/issues/$c/dependencies/blocked_by" \
+  -F issue_id="$(id "$b")"
+
+# reorder: move $c to sit directly after $a in $p's list
+gh api --method PATCH "repos/jeffwlawson/winget-manifest-lint/issues/$p/sub_issues/priority" \
+  -F sub_issue_id="$(id "$c")" -F after_id="$(id "$a")"
 ```
 
 **Every id in all three is the issue's numeric database id, not its `#number`** — hence the `id()`
