@@ -112,6 +112,7 @@ interface Step {
   readonly run?: string;
   readonly env?: Record<string, string>;
   readonly with?: Record<string, string>;
+  readonly "working-directory"?: string;
 }
 
 interface Job {
@@ -141,7 +142,10 @@ interface Workflow {
     };
     readonly pull_request_target?: { readonly types?: readonly string[] };
     readonly issues?: { readonly types?: readonly string[] };
+    readonly push?: { readonly tags?: readonly string[] };
+    readonly workflow_dispatch?: unknown;
   };
+  readonly concurrency?: { readonly group?: string; readonly "cancel-in-progress"?: boolean };
   readonly jobs: Record<string, Job>;
 }
 
@@ -848,8 +852,14 @@ describe("agent-review tells its caller what it cannot know", () => {
   it.each([
     ["the caller grants", REVIEW_CALLER],
     ["the called job bounds", REVIEW],
-  ])("%s exactly the two permissions the job uses", (_half: string, file: string) => {
-    expect(jobOf(file).permissions).toEqual({ contents: "read", "pull-requests": "write" });
+  ])("%s exactly the permissions the job uses", (_half: string, file: string) => {
+    expect(jobOf(file).permissions).toEqual({
+      contents: "read",
+      // Installing the runner package, not reading the PR — the one scope here
+      // that is about the toolchain rather than about the review.
+      packages: "read",
+      "pull-requests": "write",
+    });
   });
 
   it("declares the self-check input, typed and described", () => {
@@ -1619,6 +1629,194 @@ describe("every workflow invokes the runners at a pinned version", () => {
   it("publishes one binary, built from source", () => {
     expect(Object.values(manifest.bin ?? {})).toEqual(["./dist/cli.js"]);
     expect(manifest.files).toContain("dist");
+  });
+});
+
+/**
+ * …and the registry it is pinned *on* is GitHub Packages, not npmjs.
+ *
+ * That choice adds one thing to every workflow and one thing to every caller,
+ * and neither fails in a way that names itself. GitHub Packages has **no
+ * anonymous install** — even for a public package — so the install needs a
+ * scoped `.npmrc` and a token, and a missing `packages: read` surfaces as a 401
+ * at `npx` time, which reads like a bad token rather than a missing grant.
+ *
+ * Every check here is about that seam. The runner *version* is checked above;
+ * this is about whether the pin can be resolved at all.
+ */
+describe("the runner package is installed from GitHub Packages", () => {
+  const PACKAGE_DIR = ".sandcastle/agent-workflows";
+  const REGISTRY = "https://npm.pkg.github.com";
+  const manifest = JSON.parse(fs.readFileSync(path.join(PACKAGE_DIR, "package.json"), "utf8")) as {
+    readonly name: string;
+    readonly publishConfig?: Record<string, string>;
+  };
+  /** `@jeffwlawson`, derived — the scope the `.npmrc` entry must be limited to. */
+  const SCOPE = manifest.name.split("/")[0] as string;
+
+  /**
+   * `access: public` is an npmjs concept and carries no meaning here — package
+   * visibility on GitHub Packages follows the repository. Leaving it beside the
+   * registry would read as a setting that does something.
+   */
+  it("publishes to the registry it installs from, and says nothing else", () => {
+    expect(manifest.publishConfig).toEqual({ registry: REGISTRY });
+  });
+
+  // Indices, not the steps themselves: `stepsOf` re-parses the file on every
+  // call, so two lookups never return the same object and `indexOf` finds
+  // nothing.
+  const authIndex = (file: string): number =>
+    stepsOf(file).findIndex((s) => (s.with ?? {})["registry-url"] !== undefined);
+
+  const authStep = (file: string): Step | undefined => stepsOf(file)[authIndex(file)];
+
+  const runnerStepIndex = (file: string): number =>
+    stepsOf(file).findIndex((s) => (s.run ?? "").trim().startsWith("npx"));
+
+  /**
+   * Scoped, so a caller's own `npm ci` still resolves everything else from
+   * npmjs. An unscoped `registry-url` would point *every* install at GitHub
+   * Packages, which is a working loop sitting on top of a broken repo.
+   */
+  it.each(runnerWorkflows)("%s: writes a scoped registry entry, not a global one", (file) => {
+    const step = authStep(file);
+
+    expect(step?.uses ?? "").toMatch(/^actions\/setup-node@/);
+    expect(step?.with?.["registry-url"]).toBe(REGISTRY);
+    expect(step?.with?.["scope"]).toBe(SCOPE);
+  });
+
+  /**
+   * After the toolchain `setup-node` and before the runner. Both write the same
+   * `.npmrc` and the last one wins, so an auth step placed first is one a repo
+   * with a Node toolchain silently overwrites — and the toolchain step is the
+   * one an adopter may skip entirely, which is why the auth step declares no
+   * `node-version-file` of its own.
+   */
+  it.each(runnerWorkflows)("%s: authenticates after the toolchain, before the run", (file) => {
+    const auth = authIndex(file);
+    const toolchain = stepsOf(file).findIndex(
+      (s) => s.with?.["node-version-file"] !== undefined,
+    );
+
+    expect(toolchain).toBeGreaterThanOrEqual(0);
+    expect(auth).toBeGreaterThan(toolchain);
+    expect(auth).toBeLessThan(runnerStepIndex(file));
+    expect(authStep(file)?.with?.["node-version-file"]).toBeUndefined();
+  });
+
+  /**
+   * Gated exactly as the run it exists for. An ungated auth step would run on
+   * every refusal — cheap, but it is the same `setup-node` the refusal checks
+   * elsewhere in this file assert a refused run never reaches.
+   */
+  it.each(runnerWorkflows)("%s: is gated the same as the run it serves", (file) => {
+    expect(authStep(file)?.if).toBe(stepsOf(file)[runnerStepIndex(file)]?.if);
+  });
+
+  /**
+   * `setup-node` writes `_authToken=${NODE_AUTH_TOKEN}` into the `.npmrc` and
+   * exports a placeholder value, so the variable is not optional — without it
+   * the install fails against a token that was never a token.
+   */
+  it.each(runnerWorkflows)("%s: hands the runner step a token", (file) => {
+    const step = stepsOf(file)[runnerStepIndex(file)];
+
+    expect(step?.env?.["NODE_AUTH_TOKEN"]).toBe("${{ secrets.GITHUB_TOKEN }}");
+  });
+
+  /**
+   * And the scope that makes that token able to read. Asserted on both halves
+   * for the reason the generic permissions check is: the callee's is the bound
+   * and the caller's is the grant, and a permission declared only in the callee
+   * grants nothing at all.
+   */
+  it.each(agentWorkflows)("%s: grants packages: read", (file) => {
+    expect(jobOf(file).permissions?.["packages"]).toBe("read");
+  });
+});
+
+/**
+ * The publish side of the same registry (#113 review). One workflow, one tag
+ * shape, two guards.
+ *
+ * **The trigger is the load-bearing part.** `workflow_dispatch` only registers
+ * for workflows present on the *default branch*, so a dispatch-triggered publish
+ * could not be run until the pull request adding it had merged — and a pull
+ * request that pins a version cannot merge until that version resolves, or it
+ * takes every agent run down at `npx`. A tag push runs the workflow from the
+ * **tagged commit**, which is the only thing that makes the first publish
+ * possible from a branch.
+ */
+describe("the runner package is published from a tag push", () => {
+  const FILE = path.join(WORKFLOW_DIR, "publish-agent-workflows.yml");
+  const doc = (): Workflow => workflowOf(FILE);
+
+  it("triggers on the prefixed tag, and on nothing that needs a merge first", () => {
+    expect(doc().on?.push?.tags).toEqual(["agent-workflows-v*"]);
+    // The prefix, not a bare `v*`: this repo's headline artifact is the linter,
+    // and one tag namespace for two version lines conflates them.
+    expect(doc().on?.workflow_dispatch).toBeUndefined();
+  });
+
+  /**
+   * Two tags pushed close together must not race the registry, and a
+   * half-cancelled publish is worse than a queued one — hence first-come rather
+   * than the `cancel-in-progress: true` that reads as tidier.
+   */
+  it("serialises publishes without cancelling one", () => {
+    expect(doc().concurrency?.group).toBe("publish-agent-workflows");
+    expect(doc().concurrency?.["cancel-in-progress"]).toBe(false);
+  });
+
+  it("takes packages: write and nothing more than it spends", () => {
+    expect(jobOf(FILE).permissions).toEqual({ contents: "read", packages: "write" });
+  });
+
+  /**
+   * The two guards, in order and both present. They catch different mistakes: a
+   * tag that names a version the package does not claim (unfindable once
+   * published), and a tag that names a version the registry already has
+   * (re-pushing a moved tag, which should be a no-op rather than a 409 surfacing
+   * as a red run). Neither substitutes for the other.
+   */
+  it("checks the tag against the manifest before it checks the registry", () => {
+    const steps = stepsOf(FILE);
+    const version = steps.findIndex((s) => s.id === "version");
+    const preflight = steps.findIndex((s) => s.id === "preflight");
+
+    expect(version).toBeGreaterThanOrEqual(0);
+    expect(steps[version]?.run ?? "").toContain("::error::");
+    expect(steps[version]?.run ?? "").toContain("exit 1");
+    expect(preflight).toBeGreaterThan(version);
+    expect(steps[preflight]?.run ?? "").toContain("npm view");
+  });
+
+  it("publishes only when the preflight says the version is new", () => {
+    const publish = stepsOf(FILE).find((s) => (s.run ?? "").includes("npm publish"));
+
+    expect(publish?.if).toBe("steps.preflight.outputs.already-published == 'false'");
+    expect(publish?.["working-directory"]).toBe(".sandcastle/agent-workflows");
+    expect(publish?.env?.["NODE_AUTH_TOKEN"]).toBe("${{ secrets.GITHUB_TOKEN }}");
+  });
+
+  /**
+   * The guard that is deliberately *not* here: requiring the tagged commit to be
+   * reachable from the default branch. It would have blocked the bootstrap tag,
+   * which had to be pushed on a pull request's head — the whole reason the
+   * trigger is a tag push. A `TODO` naming it and its reason is the difference
+   * between a deferred guard and a forgotten one, so the note is held in place
+   * rather than left to be tidied away by the next reader.
+   */
+  it("records the ancestor guard it is missing, and why", () => {
+    const text = fs.readFileSync(FILE, "utf8");
+
+    expect(text).toContain("merge-base --is-ancestor");
+    expect(text).toMatch(/#\s*TODO/);
+    // Owed in the adopter-facing doc too. A guard remembered only in the file
+    // that lacks it is one nobody looks for.
+    expect(fs.readFileSync("docs/ADOPTING.md", "utf8")).toContain("--is-ancestor");
   });
 });
 
