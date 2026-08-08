@@ -23,8 +23,10 @@ Two relationships, doing different jobs:
   `agent-implement-prd` walks.
 - **`blocked-by`** — ordering, and the machine-readable record of *why* the order is what it is.
 
-Both are **native** GitHub relations, not prose in a body. A `Blocked by: #12` line is invisible to
-every consumer: the API does not report it, the UI does not draw it, and no workflow can act on it.
+Both are **native** GitHub relations, not prose in a body. Why that distinction is load-bearing —
+what a consumer can and cannot see — is in
+[`issue-tracker.md`](./issue-tracker.md#native-relations-sub-issues-and-blocking), with the
+mechanics for setting both.
 
 Upstream carries both relationships, but **as body prose, not natively**. #93 checked
 `mattpocock/course-video-manager` on 2026-08-07 — its newest feature at the time, #1514–#1518 —
@@ -52,8 +54,9 @@ instead*.)
 **What the API returns is a position, not a timestamp.** Each sub-issue holds a place in the
 parent's list; creating one appends it, which is why publishing in order is enough. But the place
 is editable — by dragging in the parent's UI, or through the sub-issue priority endpoint
-([`issue-tracker.md`](./issue-tracker.md#native-relations-sub-issues-and-blocking)). So the order is also *reorderable
-after the fact*, which is the repair below, and the hazard: dragging a sub-issue in the parent
+([`issue-tracker.md`](./issue-tracker.md#native-relations-sub-issues-and-blocking)). So the order
+is also *reorderable after the fact*, which is the repair below, and the hazard: dragging a
+sub-issue in the parent
 rewrites the execution order of a chain that has not run yet, silently and with no other effect
 visible anywhere.
 

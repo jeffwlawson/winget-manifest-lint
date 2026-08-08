@@ -245,9 +245,9 @@ the actively-maintained reference. sandcastle is local-only and tracker-agnostic
 still pin `claude-opus-4-8` / `claude-sonnet-4-6`, and the repo was last pushed 2026-06-29. Two of
 its properties are also live costs rather than free wins here: an inferred graph can be wrong with
 no edge to check it against, and a merge agent resolving conflicts is a second writer on work no
-human has reviewed — which is the shape §10's "never auto-cascade" rules exist to keep out. What it
-buys is parallelism this repo has never needed; every ordering that has actually come up was
-*inside* one PRD.
+human has reviewed — which is the shape §10's "never auto-cascade review → fix" invariant exists to
+keep out. What it buys is parallelism this repo has never needed; every ordering that has actually
+come up was *inside* one PRD.
 
 ---
 
