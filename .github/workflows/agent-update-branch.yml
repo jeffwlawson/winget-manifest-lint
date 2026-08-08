@@ -1,205 +1,27 @@
 name: Agent Update Branch
 
-# Refresh a stale PR branch from the branch it is based on.
+# The trigger, the token grant and the secrets. Everything else — the fork
+# guard, the permissions ceiling, the concurrency group, the merge and every
+# step after it — is in agent-update-branch-reusable.yml, which an adopting repo
+# references instead of copying (#98).
 #
-# Why this exists, concretely: `pull_request_target` takes the workflow YAML
-# from the base branch but checks out the PR *head*, so a PR opened before a
-# `.sandcastle/` change keeps running the OLD runner scripts — silently, with no
-# error. That bit us on #46, where a review ran the pre-suggestion review.ts and
-# the test proved nothing until `main` was merged in by hand.
-#
-# Most refreshes are a clean merge, which needs no agent at all. The agent is
-# invoked only when git reports conflicts.
-
+# `pull_request_target` reads workflow YAML from the *base* branch, and a local
+# `uses: ./…` resolves against that same commit — so the called workflow is
+# base-controlled too, like the runner version it pins (docs/ADOPTING.md §9).
 on:
   pull_request_target:
     types: [labeled]
 
 jobs:
   update-branch:
-    # Same two guards as the other PR workflows: the trigger label, and
-    # same-repo only so a fork PR never reaches checkout with secrets in scope.
-    if: >-
-      github.event.label.name == 'agent:update-branch' &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    # One group per PR — shared with agent:fix, which pushes the same branch,
-    # and agent:review, which reads it while a push would move it (#102).
-    concurrency:
-      group: agent-pr-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
+    uses: ./.github/workflows/agent-update-branch-reusable.yml
+    # Granted here, bounded there. A called workflow can only downgrade the
+    # token it is handed, so these have to be at least what the job needs.
     permissions:
       contents: write
       pull-requests: write
-
-    env:
-      PR_NUMBER: ${{ github.event.pull_request.number }}
-      BRANCH: ${{ github.event.pull_request.head.ref }}
-      # The PR's real base branch — the branch this job merges in. A hardcoded
-      # `main` merges an unrelated branch into any PR stacked on another one
-      # (#71 fixed review and fix; #100 fixed this, the site they missed).
-      BASE_REF: ${{ github.event.pull_request.base.ref }}
-      BRANCH_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      PR_STATE: ${{ github.event.pull_request.state }}
-      PR_MERGED: ${{ github.event.pull_request.merged }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GH_REPO: ${{ github.repository }}
-
-    steps:
-      - name: Pre-flight — refuse if the PR is closed or merged
-        id: state
-        run: |
-          if [ "$PR_STATE" != "open" ] || [ "$PR_MERGED" = "true" ]; then
-            gh pr edit "$PR_NUMBER" --remove-label "agent:update-branch" || true
-            gh pr comment "$PR_NUMBER" --body "Refused to run \`agent:update-branch\`: this PR is not open."
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Transition labels
-        if: steps.state.outputs.proceed == 'true'
-        run: |
-          gh pr edit "$PR_NUMBER" --remove-label "agent:update-branch" || true
-          gh pr edit "$PR_NUMBER" --remove-label "agent:blocked" || true
-          gh pr edit "$PR_NUMBER" --add-label "agent:in-progress"
-
-      - name: Checkout PR head
-        if: steps.state.outputs.proceed == 'true'
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-          token: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
-
-      # The whole job in the common case. Only a conflicted merge goes further.
-      #
-      # Shell-safe despite ref names being able to contain `$()`, backticks, `;`,
-      # `|` and `&` — see the long note on the fetch step in agent-review.yml.
-      # Short version: BASE_REF arrives as an `env:` var rather than a workflow
-      # expression spliced into this script, and a quoted parameter expansion is
-      # not re-scanned for syntax (verified 2026-08-02, #75). So `base` is data
-      # from the moment it is assigned, and every use of it stays quoted.
-      #
-      # This note lives at step level, NOT inside the `run:` block. GitHub
-      # evaluates workflow expressions across the whole run script — shell
-      # comment lines included — so prose about expressions written in there
-      # can silently change meaning, or fail the workflow at startup. See the
-      # matching note in agent-fix.yml and tests/workflows.test.ts.
-      - name: Attempt the merge
-        if: steps.state.outputs.proceed == 'true'
-        id: merge
-        run: |
-          set -uo pipefail
-          base="${BASE_REF:-main}"
-          git config user.name "sandcastle-agent[bot]"
-          git config user.email "sandcastle-agent[bot]@users.noreply.github.com"
-
-          # Checked, not bare: without `set -e` a failed fetch would leave
-          # `origin/$base` missing, every rev-parse below would print nothing,
-          # and the empty-equals-empty comparison would report "up to date" on a
-          # branch that was never merged. A deleted base branch is a real case
-          # once the base is the PR's own, so refuse instead.
-          if ! git fetch origin "+refs/heads/${base}:refs/remotes/origin/${base}"; then
-            echo "::error::Could not fetch base branch '${base}' from origin."
-            exit 1
-          fi
-          git checkout -B "$BRANCH"
-
-          base_sha=$(git rev-parse "origin/${base}")
-          if [ "$(git merge-base HEAD "origin/${base}")" = "$base_sha" ]; then
-            echo "status=uptodate" >> "$GITHUB_OUTPUT"
-            echo "Already contains origin/${base} — nothing to do."
-            exit 0
-          fi
-
-          if git merge "origin/${base}" --no-edit; then
-            echo "status=clean" >> "$GITHUB_OUTPUT"
-            echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
-            echo "Merged cleanly."
-          else
-            conflicts=$(git diff --name-only --diff-filter=U | tr '\n' ' ')
-            echo "status=conflicts" >> "$GITHUB_OUTPUT"
-            echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
-            echo "conflicts=$conflicts" >> "$GITHUB_OUTPUT"
-            echo "Conflicts in: $conflicts"
-          fi
-
-      # Node and Claude are only needed to resolve conflicts, so the clean path
-      # skips ~40s of setup entirely.
-      - name: Setup Node.js
-        if: steps.merge.outputs.status == 'conflicts'
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-
-      - name: Install dependencies
-        if: steps.merge.outputs.status == 'conflicts'
-        run: npm ci
-
-      - name: Install Claude Code
-        if: steps.merge.outputs.status == 'conflicts'
-        run: npm install -g @anthropic-ai/claude-code
-
-      - name: Resolve conflicts
-        if: steps.merge.outputs.status == 'conflicts'
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Unset variable interpolates to "", and the runner falls back to its
-          # own default. Change the model in Settings -> Variables, no commit.
-          AGENT_MODEL: ${{ vars.AGENT_MODEL }}
-          AGENT_MODEL_UPDATE_BRANCH: ${{ vars.AGENT_MODEL_UPDATE_BRANCH }}
-          OUTPUT_DIR: ${{ runner.temp }}
-          CONFLICTS: ${{ steps.merge.outputs.conflicts }}
-        run: npx tsx .sandcastle/agent-workflows/update-branch/update-branch.ts
-
-      - name: Push branch
-        if: steps.merge.outputs.status == 'clean' || steps.merge.outputs.status == 'conflicts'
-        run: |
-          set -euo pipefail
-          git push --force-with-lease="refs/heads/$BRANCH:$BRANCH_HEAD_SHA" origin "$BRANCH"
-
-      - name: Comment on the PR
-        if: steps.state.outputs.proceed == 'true' && success()
-        env:
-          STATUS: ${{ steps.merge.outputs.status }}
-          BASE_SHA: ${{ steps.merge.outputs.base_sha }}
-        run: |
-          set -uo pipefail
-          base="${BASE_REF:-main}"
-          case "$STATUS" in
-            uptodate)
-              body="\`agent:update-branch\`: already up to date with \`${base}\` — no merge needed."
-              ;;
-            clean)
-              body="\`agent:update-branch\`: merged \`${base}\` (\`${BASE_SHA:0:7}\`) cleanly — no conflicts."
-              ;;
-            conflicts)
-              body=$(cat "${RUNNER_TEMP}/update_comment.md" 2>/dev/null \
-                || echo "\`agent:update-branch\`: resolved conflicts merging \`${base}\`.")
-              ;;
-            *)
-              body="\`agent:update-branch\`: finished with status \`${STATUS}\`."
-              ;;
-          esac
-          gh pr comment "$PR_NUMBER" --body "$body"
-
-      - name: Mark blocked on failure
-        if: steps.state.outputs.proceed == 'true' && failure()
-        env:
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          reason="(no reason file written; check workflow logs)"
-          if [ -f "${RUNNER_TEMP}/failure_reason.txt" ]; then
-            reason=$(cat "${RUNNER_TEMP}/failure_reason.txt")
-          fi
-          body_file="${RUNNER_TEMP}/failure-comment.md"
-          printf '`agent:update-branch` run failed.\n\n**Reason:** %s\n\n**Workflow run:** %s\n\nThe branch was left untouched. Re-add `agent:update-branch` to retry.\n' "$reason" "$RUN_URL" > "$body_file"
-          gh pr edit "$PR_NUMBER" --add-label "agent:blocked" || true
-          gh pr comment "$PR_NUMBER" --body-file "$body_file"
-
-      - name: Always remove in-progress
-        if: always() && steps.state.outputs.proceed == 'true'
-        run: gh pr edit "$PR_NUMBER" --remove-label "agent:in-progress" || true
+    # No `with:`. The three inputs (`default-branch`, `node-version-file`,
+    # `setup`) default to this repo's values — `main`, `.nvmrc`, `npm ci`.
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      AGENT_PAT: ${{ secrets.AGENT_PAT }}
