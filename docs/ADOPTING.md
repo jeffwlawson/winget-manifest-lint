@@ -1,7 +1,8 @@
 # Adopting this agent loop in another repo
 
-Four GitHub Actions workflows that let a labelled issue become a reviewed pull request without a
-human in the middle. This is what it takes to install them somewhere else.
+Five GitHub Actions workflows that let a labelled issue become a reviewed pull request without a
+human in the middle — four for a single issue, and one that works a parent issue's sub-issues in
+sequence onto one branch. This is what it takes to install them somewhere else.
 
 Everything below was learned by hitting it. `docs/friction.md` has the narrative; this file is the
 checklist, and it is ordered so the things that fail *silently* come first.
@@ -48,6 +49,11 @@ never runs.
 `agent-implement` cascades to `agent-review` by adding a label, so without the PAT that cascade is
 dead while looking alive. The workflow emits a `::warning::` when `AGENT_PAT` is unset for exactly
 this reason.
+
+`agent-implement-prd` has it worse: it *chains itself* by re-adding `agent:implement` to the parent
+issue, so without the PAT the chain stops after one sub-issue with the trigger label sitting on the
+parent, which reads as work in progress forever. It warns too, and names how many sub-issues are
+left so the manual remedy is one remove-and-re-add.
 
 ### A label set when the issue is *created* fires no `labeled` event
 
@@ -108,7 +114,7 @@ Defaults live in `shared/common.ts`, and **most specific wins**:
 
 | Source | Scope |
 |---|---|
-| `AGENT_MODEL_<WORKFLOW>` variable | that workflow only — `AGENT_MODEL_REVIEW`, `AGENT_MODEL_UPDATE_BRANCH`, `AGENT_MODEL_IMPLEMENT`, `AGENT_MODEL_FIX` |
+| `AGENT_MODEL_<WORKFLOW>` variable | that workflow only — `AGENT_MODEL_REVIEW`, `AGENT_MODEL_UPDATE_BRANCH`, `AGENT_MODEL_IMPLEMENT`, `AGENT_MODEL_IMPLEMENT_PRD`, `AGENT_MODEL_FIX` |
 | `AGENT_MODEL` variable | every workflow, **including** ones with their own default — "run everything on X" is the point of setting it |
 | per-workflow default in code | `update-branch` → `claude-sonnet-5` |
 | global default in code | everything else → `claude-opus-5` |
@@ -155,7 +161,33 @@ gh label create "agent:blocked"     --color B60205 --description "A run failed o
 
 **Trigger labels are consumed on entry.** That is what makes a retry idempotent — a human re-adds
 the label deliberately. `agent:in-progress` is held for the duration and removed by an `always()`
-step; `agent:blocked` is applied on failure alongside a comment carrying the reason.
+step; `agent:blocked` is applied on failure alongside a comment carrying the reason — and by either
+`implement` workflow when it refuses an issue's *shape* (a sub-issue, a nested PRD, or a
+`wayfinder:*` planning ticket), since re-labelling would only reproduce the same refusal.
+
+**The one exception is the PRD chain**, which re-adds `agent:implement` to the parent itself after
+each sub-issue closes, and stops by *not* re-adding it. So on a parent issue the label is a cursor
+rather than a one-shot: seeing it there means the next slice is due, and seeing it there with no run
+happening means the PAT is missing (§1).
+
+**Amend the issue before you label it, never after.** The runner reads the issue body when the run
+starts, so an edit made afterwards describes work the agent was never asked to do — the PR then
+answers a spec that no longer exists, and the mismatch surfaces as a review finding rather than as
+anything obviously a timing problem.
+
+The PRD chain widens this. A parent's body is read fresh **by every slice**, so editing it mid-chain
+changes the brief under the slices that have not run yet, and the same PR ends up built against two
+different specs. If something has to change after labelling, say so on the PR instead: that reaches
+the review and fix agents, which the issue body no longer does.
+
+**Where the labels come from is a separate question.** These six are *workflow state*. If you also
+run a triage step — a human or a planning skill deciding an issue is well enough specified to hand
+over — that is a second vocabulary, and joining the two is a decision you have to make explicitly.
+`docs/agents/triage-labels.md` records this repo's answer: the five canonical triage roles, the
+seventh `agent:*` label (`agent:queued`, declared but inert), the `wayfinder:*` planning labels
+that never trigger a workflow, and why `ready-for-agent` → `agent:implement` stays a human hand
+rather than an automation. Take it alongside the workflows and edit the mapping — in the order §4
+gives, since the file is also a skill's output path — and the reasoning survives the rename.
 
 ---
 
@@ -163,13 +195,39 @@ step; `agent:blocked` is applied on failure alongside a comment carrying the rea
 
 ```
 .github/workflows/agent-implement.yml
+.github/workflows/agent-implement-prd.yml
 .github/workflows/agent-fix.yml
 .github/workflows/agent-review.yml
 .github/workflows/agent-update-branch.yml
 .sandcastle/agent-workflows/            # runners, prompts, shared helpers
 ```
 
+`agent-implement-prd.yml` is optional but **not independent**: it shares the `agent:implement`
+label with `agent-implement.yml`, and the two partition every label event by issue shape. Take
+both or neither. Copying only the PRD one leaves ordinary issues unhandled; copying only
+`agent-implement` is fine, but then delete its `defer` branch — otherwise a PRD-shaped issue is
+silently ignored by both a workflow that is not there and one that stepped aside for it.
+
 Optional, and repo-agnostic: `.github/workflows/token-expiry.yml`.
+
+Optional, and needs its mapping rewritten for your labels: `docs/agents/triage-labels.md` (§3).
+Run `/setup-matt-pocock-skills` **first** — it writes all three files in `docs/agents/`, including
+`triage-labels.md` at that same path — then copy this repo's version on top of what it generated.
+The reverse order silently loses everything below the mapping table, because the skill rewrites
+the file with its own default five-row version.
+
+**If you take `agent-implement-prd.yml`, take `docs/agents/ticket-shape.md` with it.** The workflow
+reads a hierarchy it does not create: a parent issue with **native sub-issues**, created in
+dependency order. That file is the publishing side of the contract, and it is the half nothing
+enforces — whoever writes the tickets, a skill or a human, owns the topological sort (§5).
+
+Publishing it natively needs **`gh` >= 2.94.0**, the release that added sub-issues and issue
+relationships to `gh issue` — `gh issue create --parent <n>` and `--blocked-by <n>` (verified on
+2.96.0). On an older `gh`, use the REST sub-issue endpoints instead, where every id is the issue's
+numeric **database id** rather than its `#number`. What you must not do is settle for a
+`Blocked by: #12` line in the body: the sub-issues API does not report it, no UI draws it, and the
+chain cannot see it, so a batch that reads perfectly to a human is one the workflow finds empty.
+Read the hierarchy back through the API before labelling anything.
 
 **Do not copy** `corpus.yml` or `scripts/lint-corpus.ts` — they lint a pinned `microsoft/winget-pkgs`
 snapshot. The *pattern* is worth stealing and is discussed in §7.
@@ -192,10 +250,11 @@ The workflows are not yet parameterised. These are the couplings to edit by hand
 
 | Assumption | Where | Notes |
 |---|---|---|
-| Default branch is `main` | `agent-implement.yml` (×3), `implement/prompt.md`, `implement/implement.ts`, `ci.yml`; plus the `main` defaults in `shared/pr-feedback.ts` and `update-branch/update-branch.ts` (`implement/implement.ts`'s `git rev-list --count main..HEAD` is the only unconditional `main` in a runner rather than in YAML, and the only site here that *hard-errors* — `sh` is `execSync`, so a missing `main` ref aborts the run) | `implement` branches from `main` and opens its PR against it, unconditionally — that is the one that is wrong on a `master`/`develop` repo. `review`, `fix` and `update-branch` take the base from the PR event (#71, #100), so their `main` is a fallback that never fires on a real PR; change it anyway, or an absent `base.ref` degrades to the wrong branch |
-| `npm ci`, `npm run verify`, `.nvmrc` | four workflows, and `implement` / `fix` / `update-branch` prompts | the whole toolchain assumption; a non-Node repo replaces all of it |
+| Default branch is `main` | `agent-implement.yml` (×3), `agent-implement-prd.yml` (×3), `implement/prompt.md`, `implement-prd/prompt.md`, `implement/implement.ts`, `ci.yml`; plus the `main` defaults in `shared/pr-feedback.ts` and `update-branch/update-branch.ts` (`implement/implement.ts`'s `git rev-list --count main..HEAD` is the only unconditional `main` in a runner rather than in YAML, and the only site here that *hard-errors* — `sh` is `execSync`, so a missing `main` ref aborts the run) | the two `implement` workflows branch from `main` and open their PR against it, unconditionally — that is what is wrong on a `master`/`develop` repo. `review`, `fix` and `update-branch` take the base from the PR event (#71, #100), so their `main` is a fallback that never fires on a real PR; change it anyway, or an absent `base.ref` degrades to the wrong branch |
+| `npm ci`, `npm run verify`, `.nvmrc` | five workflows, and `implement` / `implement-prd` / `fix` / `update-branch` prompts | the whole toolchain assumption; a non-Node repo replaces all of it |
 | `CONTEXT.md` and `CLAUDE.md` exist | every prompt reads them first | see §6 |
-| Project domain | `implement/prompt.md` has an "IF THIS ISSUE ADDS A RULE" section; it and `review/prompt.md` cite this repo's domain model (role vs. `ManifestType`, the rule classes); `fix/prompt.md` and `update-branch/prompt.md` cite `src/rules/index.ts` | roughly half of `implement/prompt.md` is this repo's domain. The extraction prompts and the rest of `review/prompt.md` are already domain-neutral |
+| Project domain | `implement/prompt.md` and `implement-prd/prompt.md` have an "IF THIS ISSUE ADDS A RULE" section; they and `review/prompt.md` cite this repo's domain model (role vs. `ManifestType`, the rule classes); `fix/prompt.md` and `update-branch/prompt.md` cite `src/rules/index.ts` | roughly half of each `implement` prompt is this repo's domain. The extraction prompts and the rest of `review/prompt.md` are already domain-neutral |
+| Sub-issues are created blockers-first | `agent-implement-prd.yml` only | it walks sub-issues **API order** and never reads `blocker` edges, so whatever publishes the sub-issues owns the topological sort. If yours publishes in an arbitrary order, fix that rather than teaching the chain to read edges (docs/parity.md §2a). The publishing side is `docs/agents/ticket-shape.md` — including the repair, which reorders the parent's list rather than recreating the slice |
 
 With the one exception called out above, nothing here will error — it will produce agents
 confidently doing the wrong project's conventions. Budget real time for the prompts specifically.
@@ -246,6 +305,20 @@ the build, warnings are counted and printed) or warning-severity rules become st
 impossible; and **ground every spec claim in a primary source** before filing the issue. Every spec
 error here came from a confidently-written issue, and the corrections that landed clean were the
 ones citing the upstream schema or source directly.
+
+**Concretely: every acceptance criterion cites the primary source it came from** — the upstream
+schema, the spec section, the API doc, the file and line. Not the issue that proposed it and not
+the plan that decomposed it. This is where it has to land because an acceptance criterion is the
+one part of an issue the agent treats as a contract: prose above it is context to be weighed, a
+checkbox is a thing to be made true. An uncited criterion is therefore a belief that gets
+*implemented*, then encoded in a test, then confirmed by review reasoning from the same belief —
+the three-way agreement the table above is about, with the citation being the cheapest place to
+break it. It is cheap in the other direction too: a criterion nobody can find a source for is
+usually the one that was wrong, and noticing that while writing the ticket costs a sentence.
+
+The PRD tier raises the stakes rather than changing the rule. A chain implements its slices
+unattended and reviews once at the end (docs/parity.md §2a), so an uncited criterion in slice 1 is
+built on for the length of the PRD before anybody reads it.
 
 ---
 
