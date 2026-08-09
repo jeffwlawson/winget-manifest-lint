@@ -64,7 +64,7 @@ See [`docs/agents/triage-labels.md`](./docs/agents/triage-labels.md).
 
 `/to-tickets` publishes a batch as a parent PRD with native sub-issues, created in dependency order.
 The shape, the ordering contract, the label rule and the checks to run before labelling anything all
-live in [`docs/agents/ticket-shape.md`](./docs/agents/ticket-shape.md) — read it in full before
+live in [`ticket-shape.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/agents/ticket-shape.md) — read it in full before
 publishing a batch. Nothing here summarises it, on purpose: a summary of a procedure is a second
 copy that goes stale, and the bullets that used to sit here put the steps in the wrong order.
 
