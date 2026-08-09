@@ -33,14 +33,23 @@ Accepts one or more manifest version directories.
 
 ## Status
 
-Early. See [CONTEXT.md](./CONTEXT.md) for the domain model,
-[docs/friction.md](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/friction.md) for the build log, and
-[docs/parity.md](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/parity.md) for how this repo's agent loop compares to the one it was
-modelled on.
+Early. See [CONTEXT.md](./CONTEXT.md) for the domain model.
 
-The linter is a testbed. The thing actually being built is the **agent loop around it** — four
-workflows that turn a labelled issue into a reviewed pull request unattended. To install that
-somewhere else, see [docs/ADOPTING.md](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/ADOPTING.md).
+The linter is a testbed. The thing actually being built is the **agent loop around it** — five
+workflows that turn a labelled issue into a reviewed pull request unattended. That loop is not
+hosted here: it lives in
+[jeffwlawson/agent-workflows](https://github.com/jeffwlawson/agent-workflows), and this repo
+consumes it through five caller workflows (`.github/workflows/agent-*.yml`) pinned to a
+published version. This repo is the loop's first adopter, so it exercises the same path any
+other adopter takes.
+
+The loop's own docs live in that repository, not this one:
+
+| Document | What it is |
+|---|---|
+| [`agent-workflows` docs/ADOPTING.md](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/ADOPTING.md) | How to install the loop somewhere else. |
+| [`agent-workflows` docs/friction.md](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/friction.md) | The build log. |
+| [`agent-workflows` docs/parity.md](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/parity.md) | How the loop compares to the one it was modelled on. |
 
 ## Non-goals
 
