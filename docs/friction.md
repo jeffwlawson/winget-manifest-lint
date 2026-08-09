@@ -1360,6 +1360,115 @@ a wrong line number published in an issue body that an agent then implemented fr
 
 ---
 
+## 2026-08-08 — The first PRD chain, and the trap it set for itself
+
+PRD #88 ran its slices into a single branch as designed. Slice 5 (#112) died immediately at
+`required("BASE_REF")`, and the PR comment read `(no reason file written)`.
+
+The cause is the seam this loop has now been bitten by twice, arriving from the opposite
+direction. `agent-implement-prd` takes its **workflow YAML from `main`** and its **runner code from
+the PR branch**. Slice 3 had just added `BASE_REF` to the reusable workflow and made
+`implement-prd.ts` require it. So the branch's runner demanded an input that `main`'s workflow had
+never heard of, and every subsequent slice was dead on arrival.
+
+### The inversion matters more than the instance
+
+The stale-runner trap already in this log is *old scripts on the branch, new YAML on `main`*. This
+is *new scripts on the branch, old YAML on `main`* — the same split brain, reached by going
+forwards instead of backwards, and the existing framing does not cover it. There is no staleness
+here at all. Both halves are current; they are current *as of different commits*.
+
+That generalises to a rule the PRD tier makes unavoidable: **a PRD that refactors the runner
+executing it has a split brain by construction.** Not by accident, not by neglecting to rebase —
+by construction, because the contract between YAML and runner is being edited by the thing the
+contract is running. Every slice after the one that changes the interface is doomed, and the fix
+lives in a PR that cannot merge until those slices finish. A genuine deadlock, broken only by
+hand.
+
+Pinning the runner to a published version **in the workflow YAML** closes it, because then both
+halves move together and a branch cannot advance one without the other. That is what #113 does,
+and it is worth recording that the argument for the versioned package arrived here from a second,
+independent direction — it was adopted for extraction and turns out to be the only thing that
+makes the PRD tier safe on its own plumbing.
+
+### One signature, two causes
+
+`required()` exits 1 **without** writing `failure_reason.txt`, so the comment says
+`(no reason file written)`. That is the identical signature to the `agent-fix` rename stranding
+old branches, already in Pending below. Two unrelated causes, one indistinguishable symptom, and
+the symptom is precisely the absence of information. The cheap fix is for `required()` to write
+the reason file before exiting; until it does, that string means "look at the run log", not
+"module resolution failed".
+
+---
+
+## 2026-08-09 — Moving the loop out, and reversing a recommendation to get there
+
+The reframe at the top of this log — the linter is the testbed, the agent loop is the deliverable
+— became an actual repository decision (#114). Two findings settled it, and the first is the one
+that matters.
+
+**The remote path has never executed.** All five callers #113 produces read
+`uses: ./.github/workflows/agent-review-reusable.yml`. A local path. Every adopting repo will use
+`uses: jeffwlawson/agent-workflows/...@v1`, and a host repo can never exercise that, because it is
+not an adopter. So the extraction is complete and *entirely untested in the configuration anyone
+else will run*. Moving the loop out converts this repo from host into first adopter, which is not
+a downgrade of the testbed — it is the first time the testbed tests the real thing.
+
+**The seam is clean enough to move cheaply.** Across the 20 runner files, `winget` appears once,
+in a comment in `review/review.ts` explaining what the corpus check contributes. The cost of
+moving only rises with each consumer, and there is currently one.
+
+### The reversal
+
+The recommendation given was: merge #113, publish `0.1.0` from *here*, then migrate — on the
+grounds that publishing validates the workflow before also changing its address. The pushback was
+one line: does that have to happen here?
+
+It did not, and the argument did not survive being checked. `.sandcastle/agent-workflows` is
+**not an npm workspace** — the root lockfile has no entry for it. The publish workflow runs
+`npm ci` at the root and `npm publish` in the subdirectory, so the build resolves `tsc` by walking
+up into the root's `node_modules`. In the new repo the package is the root and installs its own
+dependencies. Publishing here would have exercised a resolution path that ceases to exist on
+migration: a green run producing **evidence for the wrong configuration**.
+
+The general form is worth stating because it will recur. *Validate before you move* is a sound
+instinct, and it inverts exactly when the move is what changes the thing being validated. Any
+pre-migration smoke test has to be checked against that, and the check is mechanical: name what
+the test exercises, then ask which of those survive the move.
+
+The deadlock reasoning was real but was pointed the wrong way. #113 and the publish are a package
+deal — its callers `npx` a version that does not exist, so merging without publishing takes the
+whole loop down. Which means "can the publish wait?" was only ever "can #113 stay unmerged?", and
+it can, indefinitely, because `main` still runs the runner from the checkout with `npx tsx`.
+
+### A dependency that resolves by coincidence
+
+Found while arguing about the above, not by any check. `.sandcastle/agent-workflows/package.json`
+declares `typescript: 5.9.3` in `devDependencies`. It is never installed. The build works because
+the root pins the same 5.9.3 and Node walks up to find it.
+
+Green today, wrong the day either version moves, and the failure would be a compile against a
+compiler nobody chose. **A declared dependency that is never installed is worse than an
+undeclared one**, because it reads as satisfied — `npm ci`, `npm run verify` and the publish
+workflow all pass without noticing. The migration fixes it as a side effect of the package moving
+to a repo root, which is the wrong reason for it to be fixed and no reason to leave it unrecorded.
+
+### Work parked on an unmerged branch nearly left with the repo
+
+197 lines — `ADOPTING.md` §1's fifth silent failure, the §3 amend-before-labelling note, and 161
+lines of this log — sat on a pushed branch with **no pull request**. The migration plan's
+`git filter-repo` reads #113's branch, which contains none of it. It would have succeeded and
+dropped all of it, silently, because that is what a successful filter does.
+
+An unmerged branch is invisible to every tool that reasons about "the repo", and to every person
+who assumes the default branch is the state of the work. What surfaced it was a three-way line
+count across `main`, this branch and #113's branch — run only because the migration forced the
+question *which ref does history come from?* Nothing in the ordinary loop asks that. Before any
+history-rewriting move, enumerate the refs that hold work, not the files.
+
+---
+
 ## Pending — not yet exercised
 
 The full cycle is proven, including replies, resolution, and conflict resolution. Still
