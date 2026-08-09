@@ -7,14 +7,14 @@ the `gh` CLI for all operations.
 > `/to-spec`, `/wayfinder`) — the ones a human runs in Claude Code against this repo. The five
 > `agent-*` GitHub Actions workflows are *not* covered by it: their runner scripts fetch the issue
 > or PR themselves and pass the text in as a prompt argument, and the agent process is expected not
-> to shell out to `gh` at all. See `docs/ADOPTING.md` §8 for why that boundary exists.
+> to shell out to `gh` at all. See [`ADOPTING.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/ADOPTING.md) §8 for why that boundary exists.
 >
 > **`/setup-matt-pocock-skills` overwrites this file.** Everything in it is tracker *mechanics*, so
 > re-applying the local additions after a regeneration stays a small diff — the scope note, the
 > *Native relations* section, the two *Wayfinding* bullets that cross-reference that section instead
 > of repeating the endpoints inline, and the pointer at the bottom. Nothing about PRD shape,
 > ordering or labels belongs here for exactly that reason; it lives in
-> [`ticket-shape.md`](./ticket-shape.md), which the skill does not touch.
+> [`ticket-shape.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/agents/ticket-shape.md), which the skill does not touch.
 
 ## Conventions
 
@@ -107,7 +107,7 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 ## Settled elsewhere
 
 The **shape** of a `/to-tickets` batch is not fixed by this file. It is settled in
-[`ticket-shape.md`](./ticket-shape.md) (#93), along with the order the tickets are created in, the
+[`ticket-shape.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/agents/ticket-shape.md) (#93), along with the order the tickets are created in, the
 labels they carry, and the checks to run before labelling anything. Read it in full before
 publishing a batch — it is a procedure, not a preference, and this file deliberately holds no
 summary of it.

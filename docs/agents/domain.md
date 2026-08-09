@@ -22,7 +22,7 @@ resolved.
 
 ## `CONTEXT.md` is the domain model — this file is only a pointer
 
-**Do not restate the domain here.** `CONTEXT.md` is load-bearing (see `docs/ADOPTING.md` §6: an
+**Do not restate the domain here.** `CONTEXT.md` is load-bearing (see [`ADOPTING.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/ADOPTING.md) §6: an
 agent reasoned its way to a correct cross-file boundary from that file alone), and a second,
 thinner copy of the domain model would drift from it and quietly start winning arguments. When
 the domain changes, `CONTEXT.md` changes; this file only says where to look.
@@ -36,16 +36,19 @@ The same rule applies in reverse: nothing in this file is a substitute for readi
 ├── CONTEXT.md          ← the domain model
 ├── CLAUDE.md           ← commands and conventions
 ├── docs/
-│   ├── agents/         ← this directory: per-repo config for the engineering skills
-│   ├── ADOPTING.md     ← installing the agent loop elsewhere
-│   ├── friction.md     ← every time a human reached into the loop
-│   └── parity.md       ← feature-by-feature gap analysis vs. the upstream loop
+│   └── agents/         ← this directory: per-repo config for the engineering skills
 └── src/
 ```
 
+The agent loop itself lives in **[jeffwlawson/agent-workflows](https://github.com/jeffwlawson/agent-workflows)**,
+along with `ADOPTING.md`, `friction.md`, `parity.md` and `ticket-shape.md`. This repository consumes
+it: five caller workflows under `.github/workflows/`, each pinned to a published version. It used to
+host the loop, and the docs below used to be here — they moved so there would be one copy rather
+than two, and links to them are absolute for the same reason.
+
 `docs/adr/` is the conventional home for ADRs if this repo ever grows them. Today the decisions
-that would live there are recorded in `docs/friction.md` (what broke and what was done) and
-`docs/parity.md` §10 (invariants that must hold as features are added) — read those when you need
+that would live there are recorded in [`friction.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/friction.md) (what broke and what was done) and
+[`parity.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/parity.md) §10 (invariants that must hold as features are added) — read those when you need
 the *why* behind a piece of the agent loop rather than the *why* behind the linter's domain.
 
 ## Use the glossary's vocabulary
@@ -61,7 +64,7 @@ language the project doesn't use (reconsider) or there's a real gap (note it for
 
 ## Flag ADR conflicts
 
-If your output contradicts an existing ADR — or, here, an invariant in `docs/parity.md` §10 —
+If your output contradicts an existing ADR — or, here, an invariant in [`parity.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/parity.md) §10 —
 surface it explicitly rather than silently overriding:
 
 > _Contradicts the "review stays `contents: read`" invariant — but worth reopening because…_
