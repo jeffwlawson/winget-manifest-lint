@@ -35,7 +35,7 @@ one of them.
 Nothing joins them automatically. This file is the only place they are joined at all, and the join
 is a human hand (below).
 
-This is the same distinction `docs/friction.md` recorded on 2026-07-22 under "Label naming was
+This is the same distinction [`friction.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/friction.md) recorded on 2026-07-22 under "Label naming was
 ambiguous": upstream's `Sandcastle` label is its local spelling of `ready-for-agent` and gates
 *human intent*; `agent:implement` gates the *workflow*. They were never the same label wearing two
 names.
@@ -44,12 +44,12 @@ names.
 
 ## The `agent:*` vocabulary
 
-Seven labels. Six are live; `agent:queued` is declared but inert (see below). `docs/ADOPTING.md`
+Seven labels. Six are live; `agent:queued` is declared but inert (see below). [`ADOPTING.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/ADOPTING.md)
 §3 has the `gh label create` commands for the six live ones.
 
 | Label | Applied to | Consumed by | Notes |
 |---|---|---|---|
-| `agent:implement` | issue | `agent-implement.yml`, `agent-implement-prd.yml` | the only entry point from an issue. Two workflows on one label, partitioned by issue shape — a PRD-shaped parent goes to the chain, everything else to the single-issue run (`docs/parity.md` §2a) |
+| `agent:implement` | issue | `agent-implement.yml`, `agent-implement-prd.yml` | the only entry point from an issue. Two workflows on one label, partitioned by issue shape — a PRD-shaped parent goes to the chain, everything else to the single-issue run ([`parity.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/parity.md) §2a) |
 | `agent:review` | PR | `agent-review.yml` | added automatically by `agent-implement` on the PR it opens |
 | `agent:fix` | PR | `agent-fix.yml` | act on review feedback; always a human decision, never cascaded |
 | `agent:update-branch` | PR | `agent-update-branch.yml` | refresh the branch from the PR's base |
@@ -69,13 +69,13 @@ Not on the slices of a `/to-tickets` batch, though. Since #93 that batch is a pa
 slices are **sub-issues**, published blockers-first, and `agent-implement-prd` works them one at a
 time in that order — so every slice but the first is queued by construction, and saying so with a
 label adds nothing a human would act on. Sub-issues carry `ready-for-agent` and no `agent:*` label
-at all; see [`ticket-shape.md`](./ticket-shape.md). What is left for `agent:queued` is the tier
+at all; see [`ticket-shape.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/agents/ticket-shape.md). What is left for `agent:queued` is the tier
 above: dependencies between **top-level** issues.
 
 It is documented and created here so the vocabulary is settled before anything writes it, but
 **no workflow reads it today** either. Promotion (`agent:queued` → `agent:implement` when the last
 blocker closes) needs the `agent-promote-queued` workflow, which this repo does not have —
-`docs/parity.md` §1 holds that row and its ❌ stands; §8 rates the label itself 🟡, declared and
+[`parity.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/parity.md) §1 holds that row and its ❌ stands; §8 rates the label itself 🟡, declared and
 inert. Until then the label is a note to a human, with exactly the same weight as writing "blocked
 by #12" in the body.
 
@@ -97,7 +97,7 @@ Concretely, a human deciding to promote is deciding:
 
 - the blockers really are closed (nothing checks this — see `agent:queued`);
 - the issue's factual claims have been grounded in a primary source, not just written
-  confidently. `docs/parity.md` §1 records that **all six** of the pilot's spec errors came from
+  confidently. [`parity.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/parity.md) §1 records that **all six** of the pilot's spec errors came from
   small issues written quickly, and argues that no extra advisory workflow is the fix — grounding
   claims at authoring time is what actually closed it;
 - this is the next thing worth spending a run on.
@@ -125,14 +125,14 @@ So: `/triage` and `/to-tickets` may write `ready-for-agent` freely. Only a human
 | `wayfinder:task` | a child ticket that is just work |
 
 **No `agent-*` workflow triggers on any of them, and none ever should.** They are a human planning
-surface; `docs/parity.md` §1 records the deliberate split — planning happens locally with a human
+surface; [`parity.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/parity.md) §1 records the deliberate split — planning happens locally with a human
 in the loop, execution happens in CI.
 
 **Since #90 that is enforced, not just intended.** `agent-implement.yml` and
 `agent-implement-prd.yml` both refuse any issue carrying a `wayfinder:*` label outright, whatever
 shape it has, and both check the label ahead of the hierarchy — a `wayfinder:map` with children is
 handed to the PRD workflow first, which carries the same refusal. So labelling one
-`agent:implement` earns a refusal comment and `agent:blocked`, not a run. `docs/parity.md` §2
+`agent:implement` earns a refusal comment and `agent:blocked`, not a run. [`parity.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/parity.md) §2
 rates that refusal ➕: ours, with no CVM equivalent.
 
 A map is a container rather than a unit of work, and a decision ticket describes work rather than
@@ -143,7 +143,7 @@ loop, and re-triaging it to `ready-for-agent` does not change that while the lab
 
 ## Creating the labels
 
-Matching the style of `docs/ADOPTING.md` §3. The five triage labels:
+Matching the style of [`ADOPTING.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/ADOPTING.md) §3. The five triage labels:
 
 ```bash
 gh label create "needs-triage"    --color D93F0B --description "Maintainer needs to evaluate this issue"
@@ -156,7 +156,7 @@ gh label create "wontfix"         --color FFFFFF --description "Will not be acti
 GitHub creates `wontfix` in every new repo, so that last line will fail with "label already
 exists". That is fine — skip it, or use `gh label edit` if the colour differs.
 
-And the seventh `agent:*` label, alongside the six in `docs/ADOPTING.md` §3:
+And the seventh `agent:*` label, alongside the six in [`ADOPTING.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/ADOPTING.md) §3:
 
 ```bash
 gh label create "agent:queued"    --color D4C5F9 --description "Fully specified but blocked; a human promotes it to agent:implement"
@@ -173,4 +173,4 @@ gh label create "wayfinder:task"      --color BFD4F2 --description "Wayfinder ti
 ```
 
 A missing label makes its transition a no-op and the state machine drifts without erroring — the
-same failure mode `docs/ADOPTING.md` §3 warns about for the `agent:*` set.
+same failure mode [`ADOPTING.md`](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/ADOPTING.md) §3 warns about for the `agent:*` set.

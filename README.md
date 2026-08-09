@@ -34,13 +34,13 @@ Accepts one or more manifest version directories.
 ## Status
 
 Early. See [CONTEXT.md](./CONTEXT.md) for the domain model,
-[docs/friction.md](./docs/friction.md) for the build log, and
-[docs/parity.md](./docs/parity.md) for how this repo's agent loop compares to the one it was
+[docs/friction.md](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/friction.md) for the build log, and
+[docs/parity.md](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/parity.md) for how this repo's agent loop compares to the one it was
 modelled on.
 
 The linter is a testbed. The thing actually being built is the **agent loop around it** — four
 workflows that turn a labelled issue into a reviewed pull request unattended. To install that
-somewhere else, see [docs/ADOPTING.md](./docs/ADOPTING.md).
+somewhere else, see [docs/ADOPTING.md](https://github.com/jeffwlawson/agent-workflows/blob/main/docs/ADOPTING.md).
 
 ## Non-goals
 
